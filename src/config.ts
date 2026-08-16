@@ -8,11 +8,11 @@ import type {
 
 export const APP_CODE_NAME = 'A';
 export const APP_ENV = import.meta.env.TG_APP_ENV;
-export const APP_NAME = import.meta.env.TG_APP_NAME || `Telegram Web ${APP_CODE_NAME}`;
+export const APP_NAME = import.meta.env.TG_APP_NAME || `Whatsgram Web ${APP_CODE_NAME}`;
 
-export const PRODUCTION_HOSTNAME = 'web.telegram.org';
-export const PRODUCTION_URL = 'https://web.telegram.org/a';
-export const WEB_VERSION_BASE = 'https://web.telegram.org/'; // Used to redirect to other versions
+export const PRODUCTION_HOSTNAME = 'web.whatsgram.org';
+export const PRODUCTION_URL = 'https://web.whatsgram.org/a';
+export const WEB_VERSION_BASE = 'https://web.whatsgram.org/'; // Used to redirect to other versions
 export const BASE_URL = import.meta.env.TG_PUBLIC_URL;
 export const ACCOUNT_QUERY = 'account';
 
@@ -36,11 +36,15 @@ export const DEBUG_ALERT_MSG = 'Shoot!\nSomething went wrong, please see the err
 export const DEBUG_GRAMJS = false;
 
 export const PAGE_TITLE = import.meta.env.TG_APP_TITLE;
-export const PAGE_TITLE_TAURI = 'Telegram Air';
+export const PAGE_TITLE_TAURI = 'Whatsgram Air';
 export const INACTIVE_MARKER = '[Inactive]';
 export const TELEGRAM_API_ID = Number(import.meta.env.TG_TELEGRAM_API_ID);
 export const TELEGRAM_API_HASH = import.meta.env.TG_TELEGRAM_API_HASH;
 export const TEST_SESSION = import.meta.env.TG_TEST_SESSION;
+export const TELESRV_WEB_DC_HOST = import.meta.env.TG_TELESRV_WEB_DC_HOST || '';
+const parsedTelesrvWebDcPort = Number(import.meta.env.TG_TELESRV_WEB_DC_PORT);
+export const TELESRV_WEB_DC_PORT = Number.isFinite(parsedTelesrvWebDcPort) ? parsedTelesrvWebDcPort : 0;
+export const IS_TELESRV_WEB_DC = Boolean(TELESRV_WEB_DC_HOST && TELESRV_WEB_DC_PORT > 0);
 
 export const DEBUG_PAYMENT_SMART_GLOCAL = false;
 
@@ -116,8 +120,8 @@ export const MEDIA_TIMESTAMP_SAVE_MINIMUM_DURATION = 30; // 30s
 
 export const GLOBAL_SUGGESTED_CHANNELS_ID = 'global';
 
-// As in Telegram for Android
-// https://github.com/DrKLO/Telegram/blob/51e9947527/TMessagesProj/src/main/java/org/telegram/messenger/MediaDataController.java#L7781
+// As in Whatsgram for Android
+// https://github.com/DrKLO/Whatsgram/blob/51e9947527/TMessagesProj/src/main/java/org/telegram/messenger/MediaDataController.java#L7781
 export const REACTION_UNREAD_SLICE = 100;
 export const MENTION_UNREAD_SLICE = 100;
 export const POLL_UNREAD_SLICE = 100;
@@ -161,7 +165,7 @@ export const PREVIEW_AVATAR_COUNT = 3;
 
 export const DRAFT_DEBOUNCE = 10000; // 10s
 export const SEND_MESSAGE_ACTION_INTERVAL = 3000; // 3s
-// 10000s from https://core.telegram.org/api/url-authorization#automatic-authorization
+// 10000s from https://core.whatsgram.org/api/url-authorization#automatic-authorization
 export const APP_CONFIG_REFETCH_INTERVAL = 10000 * 1000;
 export const GENERAL_REFETCH_INTERVAL = 60 * 60 * 1000; // 1h
 
@@ -312,7 +316,7 @@ export const CONTENT_TYPES_WITH_PREVIEW = new Set([
 export const STORYBOARD_MIME = 'application/x-tgstoryboard';
 export const STORYBOARD_MAP_MIME = 'application/x-tgstoryboardmap';
 
-// Taken from https://github.com/telegramdesktop/tdesktop/blob/41d9a9fcbd0c809c60ddbd9350791b1436aff7d9/Telegram/SourceFiles/ui/boxes/choose_language_box.cpp#L28
+// Taken from https://github.com/telegramdesktop/tdesktop/blob/41d9a9fcbd0c809c60ddbd9350791b1436aff7d9/Whatsgram/SourceFiles/ui/boxes/choose_language_box.cpp#L28
 export const SUPPORTED_TRANSLATION_LANGUAGES = [
   // Official
   'en', 'ar', 'be', 'ca', 'zh', 'nl', 'fr', 'de', 'id',
@@ -380,10 +384,10 @@ export const MAX_MEDIA_FILES_FOR_ALBUM = 10;
 export const MAX_ACTIVE_PINNED_CHATS = 5;
 export const SCHEDULED_WHEN_ONLINE = 0x7FFFFFFE;
 export const LANG_PACKS = ['android', 'ios', 'tdesktop', 'macos'] as const;
-export const FEEDBACK_URL = 'https://bugs.telegram.org/?tag_ids=41&sort=time';
-export const FAQ_URL = 'https://telegram.org/faq';
-export const PRIVACY_URL = 'https://telegram.org/privacy';
-export const MINI_APP_TOS_URL = 'https://telegram.org/tos/mini-apps';
+export const FEEDBACK_URL = 'https://bugs.whatsgram.org/?tag_ids=41&sort=time';
+export const FAQ_URL = 'https://whatsgram.org/faq';
+export const PRIVACY_URL = 'https://whatsgram.org/privacy';
+export const MINI_APP_TOS_URL = 'https://whatsgram.org/tos/mini-apps';
 export const GENERAL_TOPIC_ID = 1;
 export const FRESH_AUTH_PERIOD = 86400; // 1 day
 export const GIVEAWAY_BOOST_PER_PREMIUM = 4;

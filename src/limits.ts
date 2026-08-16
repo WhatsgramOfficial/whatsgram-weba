@@ -10,8 +10,8 @@ export const PINNED_MESSAGES_LIMIT = 50;
 export const BLOCKED_LIST_LIMIT = 100;
 export const GLOBAL_SEARCH_CONTACTS_LIMIT = 20;
 
-// As in Telegram for Android
-// https://github.com/DrKLO/Telegram/blob/51e9947527/TMessagesProj/src/main/java/org/telegram/messenger/MediaDataController.java#L7799
+// As in Whatsgram for Android
+// https://github.com/DrKLO/Whatsgram/blob/51e9947527/TMessagesProj/src/main/java/org/telegram/messenger/MediaDataController.java#L7799
 export const TOP_REACTIONS_LIMIT = 100;
 export const RECENT_REACTIONS_LIMIT = 50;
 export const REACTION_LIST_LIMIT = 100;
@@ -67,15 +67,15 @@ export const DEFAULT_APP_CONFIG: ApiAppConfig = {
   richMessageMaxMedia: 50,
   richMessageMaxTableColumns: 20,
   autologinDomains: [
-    'instantview.telegram.org',
-    'translations.telegram.org',
+    'instantview.whatsgram.org',
+    'translations.whatsgram.org',
     'contest.dev',
     'contest.com',
-    'bugs.telegram.org',
-    'suggestions.telegram.org',
-    'themes.telegram.org',
-    'promote.telegram.org',
-    'ads.telegram.org',
+    'bugs.whatsgram.org',
+    'suggestions.whatsgram.org',
+    'themes.whatsgram.org',
+    'promote.whatsgram.org',
+    'ads.whatsgram.org',
   ],
   channelLevelMax: 100,
   boostsPerSentGift: 3,
@@ -154,7 +154,8 @@ export const DEFAULT_APP_CONFIG: ApiAppConfig = {
   bandwidthPremiumNotifyPeriod: 3600,
   bandwidthPremiumUploadSpeedup: 10,
   urlAuthDomains: [
-    'web.telegram.org',
+    'web.whatsgram.org',
+    'web.wgram.my.id',
     'web.t.me',
     'k.t.me',
     'z.t.me',
@@ -167,11 +168,15 @@ export const DEFAULT_APP_CONFIG: ApiAppConfig = {
   whitelistedDomains: [
     'telegram.dog',
     'telegram.me',
+    'whatsgram.org',
+    'wgram.my.id',
+    'me.whatsgram.org',
+    'me.wgram.my.id',
     'telegram.org',
     't.me',
     'telesco.pe',
     'fragment.com',
-    'translations.telegram.org',
+    'translations.whatsgram.org',
   ],
   typingDraftTtl: 10,
   isMessagePrimaryEditedDateEnabled: false,

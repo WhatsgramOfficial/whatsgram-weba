@@ -31,7 +31,7 @@ export function switchPermanentWebVersion(version: AvailableVersions) {
 }
 
 export function checkAndAssignPermanentWebVersion() {
-  if (window.location.hostname !== PRODUCTION_HOSTNAME) return;
+  if (window.location.hostname !== PRODUCTION_HOSTNAME && window.location.hostname !== 'web.wgram.my.id') return;
 
   const referrer = document.referrer.toLowerCase();
   if (!referrer) return;

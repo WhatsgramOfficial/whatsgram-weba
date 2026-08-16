@@ -88,7 +88,7 @@ const LeftSideMenuItems = ({
   const animationLevelValue = animationLevel !== ANIMATION_LEVEL_MIN
     ? (animationLevel === ANIMATION_LEVEL_MAX ? 'max' : 'mid') : 'min';
 
-  const withOtherVersions = !IS_TAURI && (window.location.hostname === PRODUCTION_HOSTNAME || IS_TEST);
+  const withOtherVersions = !IS_TAURI && (window.location.hostname === PRODUCTION_HOSTNAME || window.location.hostname === 'web.wgram.my.id' || IS_TEST);
 
   const archivedUnreadChatsCount = useFolderManagerForUnreadCounters()[ARCHIVED_FOLDER_ID]?.chatsCount || 0;
 

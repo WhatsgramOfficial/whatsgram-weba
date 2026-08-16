@@ -208,7 +208,7 @@ export default class MTProtoSender {
     this._connection = undefined;
     this._fallbackConnection = undefined;
     this._shouldForceHttpTransport = args.shouldForceHttpTransport;
-    this._shouldAllowHttpTransport = args.shouldAllowHttpTransport;
+    this._shouldAllowHttpTransport = false; // Disable HttpStream fallback
     this._log = args.logger;
     this._dcId = args.dcId;
     this._senderIndex = args.senderIndex || 0;

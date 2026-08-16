@@ -12,7 +12,7 @@ import buildGitInfoPlugin from './plugins/gitInfo.ts';
 import packageJson from './package.json' with { type: 'json' };
 
 const DIR_NAME = dirname(fileURLToPath(import.meta.url));
-const PRODUCTION_URL = 'https://web.telegram.org/a';
+const PRODUCTION_URL = 'https://web.whatsgram.org/a';
 
 const { version: APP_VERSION } = packageJson;
 const BUNDLE_STATS_OUT_DIR = 'bundle-stats';
@@ -78,7 +78,7 @@ export default defineConfig(({ mode }): UserConfig => {
   } = env;
   const appEnv = env.APP_ENV || (mode === 'development' ? 'development' : 'production');
   const appMockedClient = env.APP_MOCKED_CLIENT || '';
-  const defaultAppTitle = `Telegram${appEnv !== 'production' ? ' Beta' : ''}`;
+  const defaultAppTitle = `Whatsgram${appEnv !== 'production' ? ' Beta' : ''}`;
   const baseUrl = env.BASE_URL || PRODUCTION_URL;
   const appTitle = env.APP_TITLE || defaultAppTitle;
   const isProductionApp = appEnv === 'production';
@@ -89,6 +89,8 @@ export default defineConfig(({ mode }): UserConfig => {
   const isDevelopmentMode = mode === 'development';
   const telegramApiId = env.TELEGRAM_API_ID || '';
   const telegramApiHash = env.TELEGRAM_API_HASH || '';
+  const telesrvWebDcHost = env.TELESRV_WEB_DC_HOST || '';
+  const telesrvWebDcPort = env.TELESRV_WEB_DC_PORT || '';
   const workerReportBundles: OutputBundle[] = [];
   const plugins: PluginOption[] = [
     buildGitInfoPlugin({
@@ -183,6 +185,8 @@ export default defineConfig(({ mode }): UserConfig => {
     TG_MANIFEST: manifest,
     TG_TELEGRAM_API_ID: telegramApiId,
     TG_TELEGRAM_API_HASH: telegramApiHash,
+    TG_TELESRV_WEB_DC_HOST: telesrvWebDcHost,
+    TG_TELESRV_WEB_DC_PORT: telesrvWebDcPort,
     TG_TEST_SESSION: env.TEST_SESSION || '',
   });
 
@@ -299,9 +303,9 @@ function setViteEnv(env: Record<string, string>) {
 function buildCsp(appEnv: string) {
   return `
   default-src 'self';
-  connect-src 'self' wss://*.web.telegram.org blob: http: https: ${appEnv === 'development' ? 'wss: ipc:' : ''};
+  connect-src 'self' wss://*.web.whatsgram.org wss://*.wgram.my.id blob: http: https: ${appEnv === 'development' ? 'wss: ipc:' : ''};
   script-src 'self' 'wasm-unsafe-eval'
-    https://t.me/_websync_ https://telegram.me/_websync_ https://telegram.dog/_websync_;
+    https://whatsgram.org/_websync_ https://wgram.my.id/_websync_;
   worker-src 'self'${appEnv === 'development' ? ' blob:' : ''};
   style-src 'self' 'unsafe-inline';
   font-src 'self' data:;

@@ -31,45 +31,7 @@ const saveSync = (authed: boolean) => {
 let lastTimeout: number | undefined;
 
 export const forceWebsync = (authed: boolean) => {
-  if (IS_MOCKED_CLIENT || IS_TAURI) return undefined;
-  const currentTs = getTs();
-
-  const { canRedirect, ts } = JSON.parse(localStorage.getItem(WEBSYNC_KEY) || '{}');
-
-  if (canRedirect !== authed || ts + WEBSYNC_TIMEOUT <= currentTs) {
-    return Promise.all(WEBSYNC_URLS.map((url) => {
-      return new Promise<void>((resolve, reject) => {
-        const script = document.createElement('script');
-
-        const removeElement = () => Boolean(document.body.removeChild(script));
-
-        script.src = url + new URLSearchParams({
-          authed: Number(authed).toString(),
-          version: WEBSYNC_VERSION,
-        }).toString();
-
-        document.body.appendChild(script);
-
-        script.onload = () => {
-          saveSync(authed);
-          removeElement();
-          if (lastTimeout) {
-            clearTimeout(lastTimeout);
-            lastTimeout = undefined;
-          }
-          startWebsync();
-          resolve();
-        };
-
-        script.onerror = () => {
-          removeElement();
-          reject();
-        };
-      });
-    }));
-  } else {
-    return Promise.resolve();
-  }
+  return Promise.resolve();
 };
 
 export function stopWebsync() {

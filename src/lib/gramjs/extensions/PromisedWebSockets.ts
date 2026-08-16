@@ -1,9 +1,10 @@
 import { Mutex } from 'async-mutex';
 
 import { concat } from '../../../util/encoding/buffer';
+import { TELESRV_WEB_DC_HOST } from '../../../config';
 
 const closeError = new Error('WebSocket was closed');
-const CONNECTION_TIMEOUT = 3000;
+const CONNECTION_TIMEOUT = 10000;
 const MAX_TIMEOUT = 30000;
 
 export default class PromisedWebSockets {
@@ -47,11 +48,7 @@ export default class PromisedWebSockets {
   }
 
   async read(number: number) {
-    if (this.closed) {
-      throw closeError;
-    }
-    await this.canRead;
-    if (this.closed) {
+    if (this.closed || !await this.canRead) {
       throw closeError;
     }
     const toReturn = this.stream.slice(0, number);
@@ -79,10 +76,11 @@ export default class PromisedWebSockets {
   }
 
   getWebSocketLink(ip: string, port: number, isTestServer?: boolean, isPremium?: boolean) {
+    const host = TELESRV_WEB_DC_HOST || ip;
     if (port === 443) {
-      return `wss://${ip}:${port}/apiws${isTestServer ? '_test' : ''}${isPremium ? '_premium' : ''}`;
+      return `wss://${host}:${port}/apiws${isTestServer ? '_test' : ''}${isPremium ? '_premium' : ''}`;
     } else {
-      return `ws://${ip}:${port}/apiws${isTestServer ? '_test' : ''}${isPremium ? '_premium' : ''}`;
+      return `ws://${host}:${port}/apiws${isTestServer ? '_test' : ''}${isPremium ? '_premium' : ''}`;
     }
   }
 
@@ -109,8 +107,6 @@ export default class PromisedWebSockets {
       };
 
       this.client.onerror = (error) => {
-        // eslint-disable-next-line no-console
-        console.error('WebSocket error', error);
         reject(error);
         hasResolved = true;
         if (timeout) clearTimeout(timeout);
@@ -118,10 +114,6 @@ export default class PromisedWebSockets {
 
       this.client.onclose = (event) => {
         const { code, reason, wasClean } = event;
-        if (code !== 1000) {
-          // eslint-disable-next-line no-console
-          console.error(`Socket ${ip} closed. Code: ${code}, reason: ${reason}, was clean: ${wasClean}`);
-        }
 
         this.resolveRead?.(false);
         this.closed = true;

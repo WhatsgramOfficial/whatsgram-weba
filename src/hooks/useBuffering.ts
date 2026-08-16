@@ -30,13 +30,15 @@ const useBuffering = (noInitiallyBuffered = false, onTimeUpdate?: AnyToVoidFunct
   const handleBuffering = useLastCallback<BufferingEvent>((e) => {
     const media = e.currentTarget as HTMLMediaElement;
 
-    if (media.duration < MIN_ALLOWED_MEDIA_DURATION) {
-      onBroken?.();
-      return;
-    }
-
     if (e.type === 'timeupdate') {
       onTimeUpdate?.(e);
+    }
+
+    if (media.duration < MIN_ALLOWED_MEDIA_DURATION) {
+      media.loop = false;
+      setIsBufferedDebounced(true);
+      setIsReady(true);
+      return;
     }
 
     if (!isSafariPatchInProgress(media)) {
@@ -55,7 +57,7 @@ const useBuffering = (noInitiallyBuffered = false, onTimeUpdate?: AnyToVoidFunct
   });
 
   const bufferingHandlers = {
-    onPLay: handleBuffering,
+    onPlay: handleBuffering,
     onLoadedData: handleBuffering,
     onPlaying: handleBuffering,
     onLoadStart: handleBuffering, // Needed for Safari to start

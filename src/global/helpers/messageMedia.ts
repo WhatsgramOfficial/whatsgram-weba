@@ -328,6 +328,10 @@ export function getStickerMediaHash(sticker: ApiSticker, target: SizeTarget) {
       }
       return `${base}?size=s`;
     case 'preview':
+      const hasMSize = sticker.previewPhotoSizes?.some((size) => size.type === 'm');
+      if ((sticker.isCustomEmoji || sticker.isLottie || sticker.isVideo) && !hasMSize) {
+        return undefined;
+      }
       return `${base}?size=m`;
     case 'download':
       return `${base}?download`;

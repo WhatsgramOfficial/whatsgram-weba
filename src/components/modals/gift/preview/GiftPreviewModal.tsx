@@ -409,6 +409,7 @@ const GiftPreviewModal = ({ modal, animationLevel }: OwnProps & StateProps) => {
                 backdrop={selectedBackdrop}
                 sticker={pattern.sticker}
                 patternSticker={pattern.sticker}
+                isPattern
                 stickerNoPlay
                 stickerSize={PATTERN_STICKER_SIZE}
                 rarity={pattern.rarity}

@@ -119,7 +119,7 @@ const StickerView = ({
     hasIntersectedForPlayingRef.current = true;
   }
 
-  const cachedPreview = mediaLoader.getFromMemory(previewMediaHash);
+  const cachedPreview = previewMediaHash ? mediaLoader.getFromMemory(previewMediaHash) : undefined;
   const isReadyToMountFullMedia = useMountAfterHeavyAnimation(hasIntersectedForPlayingRef.current);
   const shouldForcePreview = !skipPreview && (isUnsupportedVideo || (isStatic ? isSmall : noPlay));
   const shouldLoadPreview = !skipPreview && !customColor && !cachedPreview
@@ -167,6 +167,30 @@ const StickerView = ({
   const handleAnimatedStickerLoad = useLastCallback(() => {
     onAnimatedStickerLoad?.();
     markPlayerReady();
+  });
+
+  const handleVideoEnded = useLastCallback(() => {
+    onVideoEnded?.();
+    onAnimatedStickerLoop?.();
+  });
+
+  const prevTimeRef = useRef(0);
+  const prevFrameRef = useRef(0);
+  const handleTimeUpdate = useLastCallback((e: any) => {
+    const video = e.currentTarget as HTMLVideoElement;
+    if (prevTimeRef.current > video.currentTime) {
+      onAnimatedStickerLoop?.();
+      prevFrameRef.current = 0;
+    }
+    prevTimeRef.current = video.currentTime;
+
+    if (onAnimatedStickerFrame) {
+      const currentFrame = Math.round(video.currentTime * 30);
+      for (let f = prevFrameRef.current + 1; f <= currentFrame; f++) {
+        onAnimatedStickerFrame(f);
+      }
+      prevFrameRef.current = currentFrame;
+    }
   });
 
   return (
@@ -222,9 +246,10 @@ const StickerView = ({
           loop={shouldLoop && !loopLimit}
           isPriority={forceAlways}
           disablePictureInPicture
-          onReady={markPlayerReady}
+          onReady={handleAnimatedStickerLoad}
           onBroken={markVideoBroken}
-          onEnded={onVideoEnded}
+          onEnded={handleVideoEnded}
+          onTimeUpdate={handleTimeUpdate}
           style={filterStyle}
         />
       ) : (

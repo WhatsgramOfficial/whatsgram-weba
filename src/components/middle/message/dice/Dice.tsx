@@ -45,7 +45,7 @@ const Dice = ({
   const { width } = idleSticker ? getStickerDimensions(idleSticker, isMobile) : { width: FALLBACK_SIZE };
 
   const shouldSkipToEnd = !canPlayWinEffect && !isLocal;
-  const [isShowingResult, setIsShowingResult] = useState<boolean>(shouldSkipToEnd);
+  const [isShowingResult, setIsShowingResult] = useState<boolean>(shouldSkipToEnd || !idleSticker);
   const [isValueStickerLoaded, markValueStickerLoaded] = useFlag();
 
   const idleContainerRef = useRef<HTMLDivElement>();

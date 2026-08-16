@@ -4,8 +4,8 @@ import { concat } from '../../../util/encoding/buffer';
 import { TELESRV_WEB_DC_HOST } from '../../../config';
 
 const closeError = new Error('WebSocket was closed');
-const CONNECTION_TIMEOUT = 10000;
-const MAX_TIMEOUT = 30000;
+const CONNECTION_TIMEOUT = 30000;
+const MAX_TIMEOUT = 60000;
 
 export default class PromisedWebSockets {
   private readonly mutex = new Mutex();

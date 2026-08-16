@@ -33,6 +33,7 @@ type OwnProps<T> = {
   clickArg?: T;
   observeIntersection?: ObserveFn;
   onClick?: (arg: T) => void;
+  isPattern?: boolean;
 };
 
 const DEFAULT_STICKER_SIZE = 90;
@@ -51,10 +52,11 @@ const GiftAttributeItem = <T,>({
   children,
   observeIntersection,
   onClick,
+  isPattern,
 }: OwnProps<T>) => {
   const stickerRef = useRef<HTMLDivElement>();
 
-  const customColor = useDynamicColorListener(stickerRef, undefined, !sticker?.shouldUseTextColor);
+  const customColor = useDynamicColorListener(stickerRef, undefined, !isPattern && !sticker?.shouldUseTextColor);
 
   const radialPatternBackdrop = useMemo(() => {
     if (!backdrop) return undefined;
@@ -68,9 +70,10 @@ const GiftAttributeItem = <T,>({
         patternIcon={patternSticker}
         ringsCount={1}
         ovalFactor={1}
+        observeIntersection={observeIntersection}
       />
     );
-  }, [backdrop, patternSticker]);
+  }, [backdrop, patternSticker, observeIntersection]);
 
   const handleClick = useLastCallback(() => {
     onClick?.(clickArg!);

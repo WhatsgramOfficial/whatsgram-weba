@@ -103,12 +103,16 @@ const UserBirthday = ({
 
     numbersForAge.forEach((sticker) => {
       const hash = getStickerMediaHash(sticker, 'preview');
-      mediaLoader.fetch(hash, ApiMediaFormat.BlobUrl);
+      if (hash) {
+        mediaLoader.fetch(hash, ApiMediaFormat.BlobUrl);
+      }
     });
 
     if (effectSticker) {
       const effectHash = getStickerMediaHash(effectSticker, 'preview');
-      mediaLoader.fetch(effectHash, ApiMediaFormat.BlobUrl);
+      if (effectHash) {
+        mediaLoader.fetch(effectHash, ApiMediaFormat.BlobUrl);
+      }
     }
   }, [effectSticker, isToday, numbersForAge]);
 

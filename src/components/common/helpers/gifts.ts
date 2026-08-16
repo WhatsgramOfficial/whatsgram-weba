@@ -119,7 +119,9 @@ export function preloadGiftAttributeStickers(attributes: ApiStarGiftAttribute[])
 
   const mediaHashes = [...patternStickers, ...modelStickers].map((sticker) => getStickerMediaHash(sticker, 'full'));
   mediaHashes.forEach((hash) => {
-    fetch(hash, ApiMediaFormat.BlobUrl);
+    if (hash) {
+      fetch(hash, ApiMediaFormat.BlobUrl);
+    }
   });
 }
 

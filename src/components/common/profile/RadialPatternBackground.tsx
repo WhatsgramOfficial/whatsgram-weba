@@ -11,6 +11,7 @@ import { preloadImage } from '../../../util/files';
 import { REM } from '../helpers/mediaDimensions';
 
 import useAsync from '../../../hooks/useAsync';
+import { type ObserveFn, useIsIntersecting } from '../../../hooks/useIntersectionObserver';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useMedia from '../../../hooks/useMedia';
 import useResizeObserver from '../../../hooks/useResizeObserver';
@@ -34,6 +35,7 @@ type OwnProps = {
   clearBottomSector?: boolean;
   yPosition?: number;
   withAdaptiveHeight?: boolean;
+  observeIntersection?: ObserveFn;
 };
 
 const BASE_RING_ITEM_COUNT = 8;
@@ -66,6 +68,7 @@ const RadialPatternBackground = ({
   canvasClassName,
   yPosition,
   withAdaptiveHeight,
+  observeIntersection,
 }: OwnProps) => {
   const containerRef = useRef<HTMLDivElement>();
   const canvasRef = useRef<HTMLCanvasElement>();
@@ -74,14 +77,102 @@ const RadialPatternBackground = ({
 
   const dpr = useDevicePixelRatio();
 
-  const previewMediaHash = patternIcon && getStickerMediaHash(patternIcon, 'preview');
-  const previewUrl = useMedia(previewMediaHash);
+  const isIntersecting = useIsIntersecting(containerRef, observeIntersection);
+  const shouldLoad = observeIntersection === undefined ? true : isIntersecting;
 
-  const imageUrl = previewUrl || patternUrl;
+  // Load the actual sticker media (PNG preview size=m) — the same way StickerView does it.
+  // This gives a proper distinct image per gift pattern, unlike thumbnail.dataUri which is a
+  // generic SVG path outline (often a heart shape used as placeholder for many stickers).
+  const stickerPreviewHash = patternIcon ? getStickerMediaHash(patternIcon, 'preview') : undefined;
+  // `preview` size=m may not exist for custom emoji / lottie — fall back to inline (full media)
+  const stickerInlineHash = patternIcon ? getStickerMediaHash(patternIcon, 'inline') : undefined;
+
+  const previewBlobUrl = useMedia(stickerPreviewHash, !shouldLoad);
+  const inlineBlobUrl = useMedia(stickerInlineHash, !shouldLoad || Boolean(previewBlobUrl || !stickerInlineHash));
+
+  // Prefer preview (faster), fall back to inline blob, then patternUrl, then thumbnail dataUri
+  const rawImageUrl = useMemo(() => {
+    if (patternUrl) return patternUrl;
+    if (previewBlobUrl) return previewBlobUrl;
+    if (inlineBlobUrl) return inlineBlobUrl;
+    return undefined;
+  }, [patternUrl, previewBlobUrl, inlineBlobUrl]);
 
   const { result: emojiImage } = useAsync(
-    () => (imageUrl ? preloadImage(imageUrl) : Promise.resolve(undefined)),
-    [imageUrl],
+    async () => {
+      if (!rawImageUrl || !shouldLoad) return undefined;
+
+      const isLottie = patternIcon?.isLottie && rawImageUrl === inlineBlobUrl;
+      const isVideo = patternIcon?.isVideo && rawImageUrl === inlineBlobUrl;
+
+      if (isLottie) {
+        return new Promise<HTMLCanvasElement | undefined>((resolve) => {
+          let isResolved = false;
+          import('../../../lib/tlottie/TLottie.async').then(({ ensureTLottie, getTLottie }) => {
+            ensureTLottie().then(() => {
+              const TLottie = getTLottie();
+              if (!TLottie || isResolved) return;
+
+              const container = document.createElement('div');
+              container.style.position = 'absolute';
+              container.style.width = '100px';
+              container.style.height = '100px';
+              container.style.left = '-9999px';
+              container.style.top = '-9999px';
+              container.style.visibility = 'hidden';
+              document.body.appendChild(container);
+              const renderId = `tmp_${Math.random().toString(36).slice(2)}`;
+              const viewId = 'view1';
+
+              const anim = TLottie.init(
+                rawImageUrl,
+                container,
+                renderId,
+                { size: 100, noLoop: true },
+                viewId,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                (frameIndex) => {
+                  if (frameIndex === 0) {
+                    isResolved = true;
+                    const canvas = container.querySelector('canvas');
+                    if (canvas) {
+                      const copy = document.createElement('canvas');
+                      copy.width = canvas.width;
+                      copy.height = canvas.height;
+                      copy.getContext('2d')?.drawImage(canvas, 0, 0);
+                      resolve(copy);
+                    } else {
+                      resolve(undefined);
+                    }
+                    anim.removeView(viewId);
+                    container.remove();
+                  }
+                },
+              );
+            });
+          }).catch(() => resolve(undefined));
+        });
+      }
+
+      if (isVideo) {
+        return new Promise<HTMLVideoElement | undefined>((resolve) => {
+          const video = document.createElement('video');
+          video.src = rawImageUrl;
+          video.muted = true;
+          video.playsInline = true;
+          video.onloadeddata = () => {
+            resolve(video);
+          };
+          video.onerror = () => resolve(undefined);
+        });
+      }
+
+      return preloadImage(rawImageUrl);
+    },
+    [rawImageUrl, patternIcon?.isLottie, patternIcon?.isVideo, inlineBlobUrl, shouldLoad],
   );
 
   const patternPositions = useMemo(() => {
@@ -143,9 +234,7 @@ const RadialPatternBackground = ({
 
     ctx.clearRect(0, 0, width, height);
 
-    patternPositions.forEach(({
-      x, y, sizeFactor,
-    }) => {
+    patternPositions.forEach(({ x, y, sizeFactor }) => {
       const renderX = x * Math.max(width, MIN_SIZE * dpr) + centerX;
       const renderY = y * Math.max(withAdaptiveHeight ? height : width, MIN_SIZE * dpr) + centerY;
       const size = patternSize * dpr * sizeFactor;
@@ -153,36 +242,33 @@ const RadialPatternBackground = ({
       ctx.drawImage(emojiImage, renderX - size / 2, renderY - size / 2, size, size);
     });
 
-    if (patternColor) {
-      ctx.fillStyle = patternColor;
-    } else {
-      const baseColor = backgroundColors?.[1] ?? backgroundColors?.[0] ?? '#000000';
-      const isDark = getPerceivedLuma(baseColor) < DARK_LUMA_THRESHOLD;
-      ctx.fillStyle = buildAdjustedHsvColor(baseColor, 0.5, isDark ? 0.28 : -0.28);
-    }
+    // Colorize the drawn stickers
+    const baseColor = backgroundColors?.[1] ?? backgroundColors?.[0] ?? '#000000';
+    const isDark = getPerceivedLuma(baseColor) < DARK_LUMA_THRESHOLD;
+    ctx.fillStyle = patternColor ?? buildAdjustedHsvColor(baseColor, 0.5, isDark ? 0.28 : -0.28);
     ctx.globalCompositeOperation = 'source-in';
     ctx.fillRect(0, 0, width, height);
 
+    // Radial fade-out mask
     const radialGradient = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, width * maxRadius);
-    radialGradient.addColorStop(0, 'rgb(255 255 255 / 0.4)');
-    radialGradient.addColorStop(1, 'rgb(255 255 255 / 0.9)');
-
-    // Scale around the gradient center
+    radialGradient.addColorStop(0, 'rgba(255,255,255,0.4)');
+    radialGradient.addColorStop(1, 'rgba(255,255,255,0.9)');
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.save();
     ctx.translate(centerX, centerY);
     ctx.scale(1, 1 / ovalFactor);
     ctx.translate(-centerX, -centerY);
-
-    // Alpha mask
-    ctx.globalCompositeOperation = 'destination-out';
     ctx.fillStyle = radialGradient;
-    // The higher the ovalFactor, the more we need to extend vertically
     const fillHeight = height * ovalFactor;
     ctx.fillRect(0, -fillHeight, width, fillHeight * 2);
+    ctx.restore();
+
+    ctx.globalCompositeOperation = 'source-over';
   });
 
   useEffect(() => {
     draw();
-  }, [emojiImage, patternPositions, yPosition, ovalFactor, patternColor]);
+  }, [emojiImage, patternPositions, yPosition, ovalFactor, patternColor, backgroundColors]);
 
   useLayoutEffect(() => {
     const { width, height } = getContainerSize();
@@ -194,7 +280,6 @@ const RadialPatternBackground = ({
     requestMutation(() => {
       canvas.width = width * dpr;
       canvas.height = height * dpr;
-
       draw();
     });
   }, [getContainerSize, dpr]);

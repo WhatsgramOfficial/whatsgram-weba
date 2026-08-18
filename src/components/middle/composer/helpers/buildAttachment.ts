@@ -9,6 +9,7 @@ import {
 import { parseAudioMetadata } from '../../../../util/audio';
 import {
   createPosterForVideo,
+  fetchBlob,
   preloadImage,
   preloadVideo,
 } from '../../../../util/files';
@@ -94,6 +95,19 @@ export default async function buildAttachment(
     previewBlobUrl = coverUrl;
   }
 
+  let previewBlob: Blob | undefined;
+  if (previewBlobUrl) {
+    if (previewBlobUrl === blobUrl) {
+      previewBlob = blob;
+    } else if (previewBlobUrl.startsWith('blob:')) {
+      try {
+        previewBlob = await fetchBlob(previewBlobUrl);
+      } catch (err) {
+        // Ignore fetch errors
+      }
+    }
+  }
+
   return {
     blob,
     blobUrl,
@@ -103,6 +117,7 @@ export default async function buildAttachment(
     quick,
     audio,
     previewBlobUrl,
+    previewBlob,
     shouldSendAsFile: shouldSendAsFile || undefined,
     uniqueId: `${Date.now()}-${Math.random()}`,
     ...options,

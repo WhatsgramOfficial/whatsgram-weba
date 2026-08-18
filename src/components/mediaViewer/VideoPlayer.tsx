@@ -353,12 +353,15 @@ const VideoPlayer: FC<OwnProps> = ({
           id="media-viewer-video"
           style={videoStyle}
           onWaiting={() => setIsVideoWaiting(true)}
-          onPlay={() => setIsPlaying(true)}
           onEnded={handleEnded}
           onClick={!isMobile && !isFullscreen ? handleClick : undefined}
           onDoubleClick={!IS_TOUCH_ENV ? handleFullscreenChange : undefined}
 
           {...bufferingHandlers}
+          onPlay={(e) => {
+            setIsPlaying(true);
+            bufferingHandlers.onPlay(e);
+          }}
           onPause={(e) => {
             setIsPlaying(false);
             bufferingHandlers.onPause(e);

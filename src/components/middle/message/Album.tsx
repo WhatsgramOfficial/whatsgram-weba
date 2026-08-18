@@ -9,8 +9,8 @@ import type { IAlbum, ThemeKey } from '../../../types';
 import type { IAlbumLayout } from './helpers/calculateAlbumLayout';
 
 import {
-  getIsDownloading, getMessageContent, getMessageHtmlId, getMessagePhoto,
-} from '../../../global/helpers';
+  getIsDownloading, getMessageContent, getMessageHtmlId, getMessagePhoto, isMessageFailed,
+  isMessageLocal } from '../../../global/helpers';
 import {
   selectActiveDownloads,
   selectCanAutoLoadMedia,
@@ -95,7 +95,10 @@ const Album: FC<OwnProps & StateProps> = ({
     const video = paidVideoOrPreview || getMessageContent(message).video;
 
     const fileUpload = uploadsByKey[getMessageKey(message)];
-    const uploadProgress = fileUpload?.progress;
+    const rawUploadProgress = fileUpload?.progress;
+    const uploadProgress = (rawUploadProgress === undefined && isMessageLocal(message) && !isMessageFailed(message))
+      ? 0
+      : rawUploadProgress;
     const { dimensions, sides } = albumLayout.layout[index];
 
     // Ignoring global updates is a known drawback here

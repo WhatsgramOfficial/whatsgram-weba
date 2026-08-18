@@ -1124,6 +1124,10 @@ addActionHandler('apiUpdate', (global, actions, update): ActionReturnType => {
         Object.values(global.byTabId).forEach(({ id: tabId }) => {
           actions.showAllowedMessageTypesNotification({ chatId, tabId });
         });
+      } else {
+        Object.values(global.byTabId).forEach(({ id: tabId }) => {
+          actions.showNotification({ message: `Message send failed: ${error}`, tabId });
+        });
       }
 
       global = updateChatMessage(global, chatId, localId, { sendingState: 'messageSendingStateFailed' });

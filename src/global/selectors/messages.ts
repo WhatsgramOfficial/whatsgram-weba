@@ -793,7 +793,11 @@ export function selectActiveDownloads<T extends GlobalState>(
 }
 
 export function selectUploadProgress<T extends GlobalState>(global: T, message: ApiMessage) {
-  return global.fileUploads.byMessageKey[getMessageKey(message)]?.progress;
+  const progress = global.fileUploads.byMessageKey[getMessageKey(message)]?.progress;
+  if (progress === undefined && isMessageLocal(message) && !isMessageFailed(message)) {
+    return 0;
+  }
+  return progress;
 }
 
 export function selectRealLastReadId<T extends GlobalState>(global: T, chatId: string, threadId: ThreadId) {

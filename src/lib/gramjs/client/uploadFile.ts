@@ -90,7 +90,23 @@ export async function uploadFile(
           isDone = true;
 
           let isDone2 = false;
-          const partBytes = await blobSliceMemo.arrayBuffer();
+          let partBytes: ArrayBuffer;
+          try {
+            let timeoutId: ReturnType<typeof setTimeout>;
+            try {
+              partBytes = await Promise.race([
+                blobSliceMemo.arrayBuffer(),
+                new Promise<never>((_, reject) => {
+                  timeoutId = setTimeout(() => reject(new Error('arrayBuffer timeout')), 5000);
+                }),
+              ]);
+            } finally {
+              clearTimeout(timeoutId!);
+            }
+          } catch (readErr) {
+            // Fallback for iOS Safari Web Worker file reading bugs
+            partBytes = new FileReaderSync().readAsArrayBuffer(blobSliceMemo);
+          }
           if (shouldDebugExportedSenders) {
             setTimeout(() => {
               if (isDone2) return;
@@ -113,7 +129,7 @@ export async function uploadFile(
           );
           client.releaseExportedSender(sender);
           isDone2 = true;
-        } catch (err) {
+        } catch (err: any) {
           logWithSenderIndex(`❗️️️Upload part failed ${err?.toString()} j=${jMemo}`);
           if (sender && !sender.isConnected()) {
             await sleep(DISCONNECT_SLEEP);
@@ -124,6 +140,12 @@ export async function uploadFile(
               isPremiumFloodWaitSent = true;
             }
             await sleep(err.seconds * 1000);
+            continue;
+          } else if (
+            err?.message?.includes('WORKER_BUSY_TOO_LONG_RETRY')
+            || err?.errorMessage?.includes('WORKER_BUSY_TOO_LONG_RETRY')
+          ) {
+            await sleep(1000);
             continue;
           }
           dcManager.releaseWorker(senderIndex, partSize);

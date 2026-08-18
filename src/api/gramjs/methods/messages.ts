@@ -53,7 +53,7 @@ import {
   SUPPORTED_PHOTO_CONTENT_TYPES,
   SUPPORTED_VIDEO_CONTENT_TYPES,
 } from '../../../config';
-import { fetchFile } from '../../../util/files';
+import { blobToFile, fetchFile } from '../../../util/files';
 import { compact, split } from '../../../util/iteratees';
 import { getMessageKey } from '../../../util/keys/messageKey';
 import { getServerTime } from '../../../util/serverTime';
@@ -511,6 +511,13 @@ export function sendApiMessage(
           // eslint-disable-next-line no-console
           console.warn(err);
         }
+
+        sendApiUpdate({
+          '@type': 'updateMessageSendFailed',
+          chatId: chat.id,
+          localId: localMessage.id,
+          error: (err as Error)?.message || 'Upload failed',
+        });
 
         await mediaQueue;
 
@@ -1080,6 +1087,14 @@ async function uploadMedia(message: ApiMessage, attachment: ApiAttachment, onPro
   };
 
   const fetchAndUpload = async (url: string, progressCallback?: (progress: number) => void) => {
+    if (attachment.blob && url === attachment.blobUrl && !attachment.compressedBlobUrl) {
+      const file = blobToFile(attachment.blob, filename);
+      return uploadFile(file, progressCallback);
+    }
+    if (attachment.previewBlob && url === attachment.previewBlobUrl) {
+      const file = blobToFile(attachment.previewBlob, filename);
+      return uploadFile(file, progressCallback);
+    }
     const file = await fetchFile(url, filename);
     return uploadFile(file, progressCallback);
   };

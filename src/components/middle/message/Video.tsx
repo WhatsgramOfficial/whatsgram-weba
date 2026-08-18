@@ -182,7 +182,7 @@ const Video = <T,>({
     ref: spinnerRef,
     shouldRender: shouldRenderSpinner,
   } = useShowTransition({
-    isOpen: isTransferring && !isUnsupported,
+    isOpen: isTransferring && (!isUnsupported || isUploading || isDownloading),
     noMountTransition: wasLoadDisabled,
     withShouldRender: true,
   });
@@ -195,7 +195,7 @@ const Video = <T,>({
     ref: transferProgressRef,
     shouldRender: shouldRenderTransferProgress,
   } = useShowTransition({
-    isOpen: isTransferring && (!isUnsupported || isDownloading),
+    isOpen: isTransferring && (!isUnsupported || isUploading || isDownloading),
     noMountTransition: wasLoadDisabled,
     withShouldRender: true,
   });

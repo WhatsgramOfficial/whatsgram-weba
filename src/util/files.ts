@@ -57,9 +57,30 @@ export function preloadImage(url: string): Promise<HTMLImageElement> {
 export function preloadVideo(url: string): Promise<HTMLVideoElement> {
   return new Promise((resolve, reject) => {
     const video = document.createElement('video');
-    video.volume = 0;
-    video.onloadedmetadata = () => resolve(video);
-    video.onerror = reject;
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = 'metadata';
+
+    const cleanup = () => {
+      video.onloadedmetadata = undefined;
+      video.onerror = undefined;
+    };
+
+    const timeoutId = setTimeout(() => {
+      cleanup();
+      reject(new Error('Video load timeout'));
+    }, 5000);
+
+    video.onloadedmetadata = () => {
+      clearTimeout(timeoutId);
+      cleanup();
+      resolve(video);
+    };
+    video.onerror = () => {
+      clearTimeout(timeoutId);
+      cleanup();
+      reject(new Error('Video load error'));
+    };
     video.src = url;
   });
 }

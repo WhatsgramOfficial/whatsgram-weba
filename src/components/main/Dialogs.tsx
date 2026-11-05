@@ -88,7 +88,7 @@ const Dialogs = ({ dialogs, currentMessageList }: StateProps) => {
     );
   };
 
-  const renderTextDialog = (renderedText: TeactNode, title = 'Telegram') => {
+  const renderTextDialog = (renderedText: TeactNode, title = 'Whatsgram') => {
     return (
       <Modal
         isOpen={isModalOpen}
@@ -151,7 +151,7 @@ function getErrorHeader(lang: LangFn, error: ApiDialogError) {
   }
 
   if (!error.hasErrorKey) {
-    return 'Telegram';
+    return 'Whatsgram';
   }
 
   return lang('SomethingWentWrong');

@@ -303,7 +303,8 @@ function setViteEnv(env: Record<string, string>) {
 function buildCsp(appEnv: string) {
   return `
   default-src 'self';
-  connect-src 'self' wss://*.web.whatsgram.org wss://*.wgram.my.id blob: http: https: ${appEnv === 'development' ? 'wss: ipc:' : ''};
+  connect-src 'self' wss://*.whatsgram.org wss://whatsgram.org wss://web.whatsgram.org
+    wss://*.web.whatsgram.org wss://*.wgram.my.id blob: http: https: ${appEnv === 'development' ? 'wss: ipc:' : ''};
   script-src 'self' 'wasm-unsafe-eval'
     https://whatsgram.org/_websync_ https://wgram.my.id/_websync_;
   worker-src 'self'${appEnv === 'development' ? ' blob:' : ''};

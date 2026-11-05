@@ -1,5 +1,5 @@
+import { TELESRV_WEB_DC_HOST, TELESRV_WEB_DC_PORT } from '../../../config';
 import { concat } from '../../../util/encoding/buffer';
-import { TELESRV_WEB_DC_HOST } from '../../../config';
 
 const closeError = new Error('HttpStream was closed');
 const REQUEST_TIMEOUT = 10000;
@@ -59,10 +59,11 @@ export default class HttpStream {
 
   static getURL(ip: string, port: number, isTestServer?: boolean, isPremium?: boolean) {
     const host = TELESRV_WEB_DC_HOST || ip;
-    if (port === 443) {
-      return `https://${host}:${port}/apiw1${isTestServer ? '_test' : ''}${isPremium ? '_premium' : ''}`;
+    const effectivePort = (TELESRV_WEB_DC_HOST && TELESRV_WEB_DC_PORT) ? TELESRV_WEB_DC_PORT : port;
+    if (effectivePort === 443) {
+      return `https://${host}:${effectivePort}/apiw1${isTestServer ? '_test' : ''}${isPremium ? '_premium' : ''}`;
     } else {
-      return `http://${host}:${port}/apiw1${isTestServer ? '_test' : ''}${isPremium ? '_premium' : ''}`;
+      return `http://${host}:${effectivePort}/apiw1${isTestServer ? '_test' : ''}${isPremium ? '_premium' : ''}`;
     }
   }
 

@@ -1,7 +1,7 @@
 import { Mutex } from 'async-mutex';
 
+import { TELESRV_WEB_DC_HOST, TELESRV_WEB_DC_PORT } from '../../../config';
 import { concat } from '../../../util/encoding/buffer';
-import { TELESRV_WEB_DC_HOST } from '../../../config';
 
 const closeError = new Error('WebSocket was closed');
 const CONNECTION_TIMEOUT = 30000;
@@ -77,10 +77,11 @@ export default class PromisedWebSockets {
 
   getWebSocketLink(ip: string, port: number, isTestServer?: boolean, isPremium?: boolean) {
     const host = TELESRV_WEB_DC_HOST || ip;
-    if (port === 443) {
-      return `wss://${host}:${port}/apiws${isTestServer ? '_test' : ''}${isPremium ? '_premium' : ''}`;
+    const effectivePort = (TELESRV_WEB_DC_HOST && TELESRV_WEB_DC_PORT) ? TELESRV_WEB_DC_PORT : port;
+    if (effectivePort === 443) {
+      return `wss://${host}:${effectivePort}/apiws${isTestServer ? '_test' : ''}${isPremium ? '_premium' : ''}`;
     } else {
-      return `ws://${host}:${port}/apiws${isTestServer ? '_test' : ''}${isPremium ? '_premium' : ''}`;
+      return `ws://${host}:${effectivePort}/apiws${isTestServer ? '_test' : ''}${isPremium ? '_premium' : ''}`;
     }
   }
 
@@ -112,9 +113,7 @@ export default class PromisedWebSockets {
         if (timeout) clearTimeout(timeout);
       };
 
-      this.client.onclose = (event) => {
-        const { code, reason, wasClean } = event;
-
+      this.client.onclose = () => {
         this.resolveRead?.(false);
         this.closed = true;
         if (this.disconnectedCallback) {

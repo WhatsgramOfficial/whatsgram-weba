@@ -37,6 +37,7 @@ export default defineConfig(
     'public/',
     'deploy/update_version.js',
     'tauri/target/',
+    'test_fp*.js',
   ]),
   {
     name: 'teact-config',

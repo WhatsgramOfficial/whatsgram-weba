@@ -62,8 +62,8 @@ export function preloadVideo(url: string): Promise<HTMLVideoElement> {
     video.preload = 'metadata';
 
     const cleanup = () => {
-      video.onloadedmetadata = undefined;
-      video.onerror = undefined;
+      video.onloadedmetadata = () => {};
+      video.onerror = () => {};
     };
 
     const timeoutId = setTimeout(() => {

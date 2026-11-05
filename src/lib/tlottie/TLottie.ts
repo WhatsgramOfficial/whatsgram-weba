@@ -1,5 +1,3 @@
-import type Color from 'colorjs.io';
-
 import type { EmojiFitzModifier } from '../../util/emoji/skinTone';
 
 import { animate } from '../../util/animation';
@@ -12,6 +10,7 @@ import Deferred from '../../util/Deferred';
 import generateUniqueId from '../../util/generateUniqueId';
 import { handleError } from '../../util/handleError';
 import launchMediaWorkers, { MAX_WORKERS } from '../../util/launchMediaWorkers';
+import { type Color, convertColor } from '../color';
 import { requestMeasure, requestMutation } from '../fasterdom/fasterdom';
 
 interface Params {
@@ -408,11 +407,17 @@ class TLottie {
         this.tgsUrl,
         this.imgSize,
         this.params.isLowPriority || false,
-        this.customColor?.to('srgb').coords.map(convertSrgbChannel) as [number, number, number] | undefined,
+        this.customColor
+          ? convertColor(this.customColor, 'srgb').coords.map(convertSrgbChannel) as [number, number, number]
+          : undefined,
         this.params.fitzModifier,
         this.onRendererInit.bind(this, dataGeneration),
       ],
-    }).catch(this.onRendererError.bind(this, dataGeneration));
+    }).then((isSuccess) => {
+      if (!isSuccess) {
+        this.onRendererUnavailable(dataGeneration);
+      }
+    }, this.onRendererError.bind(this, dataGeneration));
   }
 
   private destroyRenderer() {
@@ -443,6 +448,7 @@ class TLottie {
     const dataGeneration = ++this.dataGeneration;
 
     this.framesCount = undefined;
+    this.isRendererInited = false;
     this.approxFrameIndex = 0;
     this.stopFrameIndex = 0;
     this.direction = 1;
@@ -460,7 +466,11 @@ class TLottie {
         this.params.fitzModifier,
         this.onChangeData.bind(this, dataGeneration),
       ],
-    }).catch(this.onRendererError.bind(this, dataGeneration));
+    }).then((isSuccess) => {
+      if (!isSuccess) {
+        this.onRendererUnavailable(dataGeneration);
+      }
+    }, this.onRendererError.bind(this, dataGeneration));
   }
 
   private onChangeData(dataGeneration: number, reduceFactor: number, msPerFrame: number, framesCount: number) {
@@ -483,14 +493,27 @@ class TLottie {
     this.doPlay();
   }
 
-  private onRendererError(dataGeneration: number, err: unknown) {
+  private onRendererError(dataGeneration: number, err: Error) {
     if (dataGeneration !== this.dataGeneration || this.isDestroyed) {
       return;
     }
 
+    this.markRendererUnavailable();
+    handleError(err);
+  }
+
+  private onRendererUnavailable(dataGeneration: number) {
+    if (dataGeneration !== this.dataGeneration || this.isDestroyed) {
+      return;
+    }
+
+    this.markRendererUnavailable();
+  }
+
+  private markRendererUnavailable() {
+    this.isRendererInited = false;
     this.isWaiting = false;
     this.isAnimating = false;
-    handleError(err instanceof Error ? err : new Error(String(err)));
   }
 
   private doPlay() {
@@ -580,6 +603,10 @@ class TLottie {
       // Forward animation finished
       if (delta > 0 && (frameIndex === this.framesCount! - 1 || expectedNextFrameIndex > this.framesCount! - 1)) {
         if (this.params.noLoop) {
+          if (frameIndex !== this.framesCount! - 1) {
+            this.approxFrameIndex = this.framesCount! - 1;
+            return true;
+          }
           this.isAnimating = false;
           this.isEnded = true;
           this.onEnded?.();
@@ -592,6 +619,10 @@ class TLottie {
         // Backward animation finished
       } else if (delta < 0 && (frameIndex === 0 || expectedNextFrameIndex < 0)) {
         if (this.params.noLoop) {
+          if (frameIndex !== 0) {
+            this.approxFrameIndex = 0;
+            return true;
+          }
           this.isAnimating = false;
           this.isEnded = true;
           this.onEnded?.();
@@ -610,6 +641,10 @@ class TLottie {
             || (delta < 0 && expectedNextFrameIndex < this.stopFrameIndex)
           ))
       ) {
+        if (frameIndex !== this.stopFrameIndex) {
+          this.approxFrameIndex = this.stopFrameIndex;
+          return true;
+        }
         this.stopFrameIndex = undefined;
         this.isAnimating = false;
         return false;

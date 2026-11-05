@@ -1,11 +1,10 @@
+import type { Editor } from '@tiptap/core';
 import type { Command } from '@tiptap/pm/state';
 import {
   addColumnAfter,
   addColumnBefore,
   addRowAfter,
   addRowBefore,
-  deleteColumn,
-  deleteRow,
   mergeCells,
   splitCell,
   TableMap,
@@ -29,7 +28,6 @@ import captureEscKeyListener from '../../../../util/captureEscKeyListener';
 import { TABLE_CELL_HIGHLIGHT_ATTR } from '../../../../util/tiptap/constants';
 import {
   canToggleRichEditorTableHighlight,
-  deleteRichEditorTable,
   getRichEditorTableCellAttr,
   getRichEditorTableMoveTargets,
   getRichEditorTableSelection,
@@ -55,8 +53,11 @@ import NestedMenuItem from '../../../ui/NestedMenuItem';
 
 import styles from './EditableTable.module.scss';
 
+type EditableTableCommands = Pick<Editor['commands'], 'deleteColumn' | 'deleteRow' | 'deleteTable'>;
+
 export type EditableTableProps = {
   editorView: EditorView;
+  editorCommands: EditableTableCommands;
   rootElement: HTMLDivElement;
   tableElement: HTMLTableElement;
   colgroupElement: HTMLTableColElement;
@@ -87,6 +88,7 @@ type TableLayout = {
   tableHeight: number;
   isBordered: boolean;
   isStriped: boolean;
+  isCompact: boolean;
   isRtl: boolean;
   columns: AxisSegment[];
   rows: AxisSegment[];
@@ -128,6 +130,7 @@ const EMPTY_LAYOUT: TableLayout = {
   tableHeight: 0,
   isBordered: true,
   isStriped: false,
+  isCompact: false,
   isRtl: false,
   columns: [],
   rows: [],
@@ -147,6 +150,7 @@ const ALIGNMENT_OPTION_GROUPS: AlignmentOption[][] = [
 
 const EditableTable = ({
   editorView,
+  editorCommands,
   rootElement,
   tableElement,
   colgroupElement,
@@ -669,6 +673,18 @@ const EditableTable = ({
     focusEditor(editorView);
   });
 
+  const handleDelete = useLastCallback(() => {
+    isKeyboardMenuRef.current = false;
+    if (layout.selection?.kind === 'table') {
+      editorCommands.deleteTable();
+    } else if (layout.selection?.kind === 'row') {
+      editorCommands.deleteRow();
+    } else if (layout.selection?.kind === 'column') {
+      editorCommands.deleteColumn();
+    }
+    focusEditor(editorView);
+  });
+
   const getTriggerElement = useLastCallback(() => gripRef.current);
   const getRootElement = useLastCallback(() => document.body);
   const getMenuElement = useLastCallback(() => menuRef.current);
@@ -878,14 +894,21 @@ const EditableTable = ({
         {isTableSelection && (
           <>
             <MenuItem
-              icon={layout.isStriped ? 'check' : 'table'}
+              icon={layout.isStriped ? 'check' : 'table-striped'}
               withPreventDefaultOnMouseDown
               onClick={() => handleToggleTableAttr('isStriped')}
             >
               {lang('RichEditorTableStriped')}
             </MenuItem>
             <MenuItem
-              icon={!layout.isBordered ? 'check' : 'table'}
+              icon={layout.isCompact ? 'check' : 'table-compact'}
+              withPreventDefaultOnMouseDown
+              onClick={() => handleToggleTableAttr('isCompact')}
+            >
+              {lang('RichEditorTableCompact')}
+            </MenuItem>
+            <MenuItem
+              icon={!layout.isBordered ? 'check' : 'table-borderless'}
               withPreventDefaultOnMouseDown
               onClick={() => handleToggleTableAttr('isBordered')}
             >
@@ -996,9 +1019,7 @@ const EditableTable = ({
               icon="table-delete"
               destructive
               withPreventDefaultOnMouseDown
-              onClick={() => runCommand(
-                isTableSelection ? deleteRichEditorTable : isRowSelection ? deleteRow : deleteColumn,
-              )}
+              onClick={handleDelete}
             >
               {isTableSelection ? lang('RichEditorTableDeleteTable') : lang(
                 isRowSelection
@@ -1050,6 +1071,7 @@ function measureTableLayout(
     tableHeight: tableRect.height,
     isBordered: tableNode.attrs.isBordered !== false,
     isStriped: Boolean(tableNode.attrs.isStriped),
+    isCompact: Boolean(tableNode.attrs.isCompact),
     isRtl: getComputedStyle(tableElement).direction === 'rtl',
     columns: measureColumns(colgroupElement, tableRect, rootRect, map.width),
     rows: measureRows(tableElement, rootRect),

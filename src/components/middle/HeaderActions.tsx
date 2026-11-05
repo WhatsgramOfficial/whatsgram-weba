@@ -1,4 +1,3 @@
-import type { FC } from '../../lib/teact/teact';
 import {
   memo, useCallback, useMemo, useRef, useState,
 } from '../../lib/teact/teact';
@@ -14,7 +13,7 @@ import {
   getHasAdminRight,
   getIsSavedDialog,
   isAnonymousForwardsChat,
-  isChatBasicGroup, isChatChannel, isChatSuperGroup,
+  isChatChannel, isChatSuperGroup,
 } from '../../global/helpers';
 import {
   selectBot,
@@ -40,7 +39,6 @@ import focusNoScroll from '../../util/focusNoScroll';
 import { useHotkeys } from '../../hooks/useHotkeys';
 import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
-import useOldLang from '../../hooks/useOldLang';
 
 import CustomEmoji from '../common/CustomEmoji';
 import Icon from '../common/icons/Icon';
@@ -89,7 +87,7 @@ interface StateProps {
   currentTone?: TranslationTone;
 }
 
-const HeaderActions: FC<OwnProps & StateProps> = ({
+const HeaderActions = ({
   chatId,
   threadId,
   noMenu,
@@ -120,7 +118,7 @@ const HeaderActions: FC<OwnProps & StateProps> = ({
   isAccountFrozen,
   currentTone,
   onTopicSearch,
-}) => {
+}: OwnProps & StateProps) => {
   const {
     openMiddleSearch,
     requestMasterAndRequestCall,
@@ -137,7 +135,7 @@ const HeaderActions: FC<OwnProps & StateProps> = ({
     openCocoonModal,
   } = getActions();
   const menuButtonRef = useRef<HTMLButtonElement>();
-  const oldLang = useOldLang();
+
   const lang = useLang();
 
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -210,24 +208,20 @@ const HeaderActions: FC<OwnProps & StateProps> = ({
     handleSearchClick();
   });
 
-  const getTextWithLanguage = useCallback((langKey: string, langCode: string) => {
-    const simplified = langCode.split('-')[0];
-    const translationKey = `TranslateLanguage${simplified.toUpperCase()}`;
-    const name = oldLang(translationKey);
-    if (name !== translationKey) {
-      return oldLang(langKey, name);
-    }
-
+  const getTextWithLanguage = useCallback((
+    key: 'TranslateToButton' | 'DoNotTranslateLanguage' | 'AddedToDoNotTranslate',
+    langCode: string,
+  ) => {
     const translatedNames = new Intl.DisplayNames([language], { type: 'language' });
     const translatedName = translatedNames.of(langCode)!;
-    return oldLang(`${langKey}Other`, translatedName);
-  }, [language, oldLang]);
+    return lang(key, { language: translatedName });
+  }, [language, lang]);
 
   const buttonText = useMemo(() => {
-    if (isTranslating) return oldLang('ShowOriginalButton');
+    if (isTranslating) return lang('ShowOriginalButton');
 
     return getTextWithLanguage('TranslateToButton', translationLanguage);
-  }, [translationLanguage, getTextWithLanguage, isTranslating, oldLang]);
+  }, [translationLanguage, getTextWithLanguage, isTranslating, lang]);
 
   const doNotTranslateText = useMemo(() => {
     if (!detectedChatLanguage) return undefined;
@@ -268,8 +262,8 @@ const HeaderActions: FC<OwnProps & StateProps> = ({
     'Mod+F': handleHotkeySearchClick,
   }), []));
 
-  const MoreMenuButton: FC<{ onTrigger: () => void; isOpen?: boolean }> = useMemo(() => {
-    return ({ onTrigger, isOpen }) => (
+  const MoreMenuButton = useMemo(() => {
+    return ({ onTrigger, isOpen }: { onTrigger: () => void; isOpen?: boolean }) => (
       <Button
         round
         ripple={isRightColumnShown}
@@ -277,11 +271,11 @@ const HeaderActions: FC<OwnProps & StateProps> = ({
         size="smaller"
         className={isOpen ? 'active' : ''}
         onClick={onTrigger}
-        ariaLabel={oldLang('TranslateMessage')}
+        ariaLabel={lang('AiMessageEditorTranslate')}
         iconName="language"
       />
     );
-  }, [isRightColumnShown, oldLang]);
+  }, [isRightColumnShown, lang]);
 
   return (
     <div className="HeaderActions">
@@ -295,7 +289,7 @@ const HeaderActions: FC<OwnProps & StateProps> = ({
             {buttonText}
           </MenuItem>
           <MenuItem icon="replace" onClick={handleChangeLanguage}>
-            {oldLang('Chat.Translate.Menu.To')}
+            {lang('ChatTranslateMenuTo')}
           </MenuItem>
           <NestedMenuItem
             icon="tone"
@@ -303,21 +297,21 @@ const HeaderActions: FC<OwnProps & StateProps> = ({
             submenu={(
               <>
                 <MenuItem
-                  icon={currentTone === 'neutral' ? 'message-succeeded' : undefined}
+                  icon={currentTone === 'neutral' ? 'check' : undefined}
                   customIcon={currentTone !== 'neutral' ? <Icon name="placeholder" /> : undefined}
                   onClick={() => handleSetTone('neutral')}
                 >
                   {lang('TranslationToneNeutral')}
                 </MenuItem>
                 <MenuItem
-                  icon={currentTone === 'formal' ? 'message-succeeded' : undefined}
+                  icon={currentTone === 'formal' ? 'check' : undefined}
                   customIcon={currentTone !== 'formal' ? <Icon name="placeholder" /> : undefined}
                   onClick={() => handleSetTone('formal')}
                 >
                   {lang('TranslationToneFormal')}
                 </MenuItem>
                 <MenuItem
-                  icon={currentTone === 'casual' ? 'message-succeeded' : undefined}
+                  icon={currentTone === 'casual' ? 'check' : undefined}
                   customIcon={currentTone !== 'casual' ? <Icon name="placeholder" /> : undefined}
                   onClick={() => handleSetTone('casual')}
                 >
@@ -331,7 +325,7 @@ const HeaderActions: FC<OwnProps & StateProps> = ({
           <MenuSeparator />
           {detectedChatLanguage
             && <MenuItem icon="hand-stop" onClick={handleDoNotTranslate}>{doNotTranslateText}</MenuItem>}
-          <MenuItem icon="close-circle" onClick={handleHide}>{oldLang('Hide')}</MenuItem>
+          <MenuItem icon="close-circle" onClick={handleHide}>{lang('Hide')}</MenuItem>
           <MenuSeparator />
           <MenuItem withWrap onClick={handleCocoonClick}>
             {lang('TranslateMenuCocoon', {
@@ -359,7 +353,7 @@ const HeaderActions: FC<OwnProps & StateProps> = ({
               color="translucent"
               size="smaller"
               onClick={handleSearchClick}
-              ariaLabel={oldLang('Conversation.SearchPlaceholder')}
+              ariaLabel={lang('ConversationSearchPlaceholder')}
               iconName="search"
             />
           )}
@@ -369,7 +363,7 @@ const HeaderActions: FC<OwnProps & StateProps> = ({
               color="translucent"
               size="smaller"
               onClick={handleRequestCall}
-              ariaLabel="Call"
+              ariaLabel={lang('Call')}
               iconName="phone"
             />
           )}
@@ -384,7 +378,7 @@ const HeaderActions: FC<OwnProps & StateProps> = ({
           size="smaller"
           iconName="user"
           onClick={handleJoinRequestsClick}
-          ariaLabel={isChannel ? oldLang('SubscribeRequests') : oldLang('MemberRequests')}
+          ariaLabel={isChannel ? lang('SubscribeRequests') : lang('MemberRequests')}
         >
           <div className="badge">{pendingJoinRequests}</div>
         </Button>
@@ -397,7 +391,7 @@ const HeaderActions: FC<OwnProps & StateProps> = ({
         size="smaller"
         color="translucent"
         disabled={noMenu}
-        ariaLabel="More actions"
+        ariaLabel={lang('AccDescrMoreOptions')}
         onClick={handleHeaderMenuOpen}
         iconName="more"
       />
@@ -477,7 +471,7 @@ export default memo(withGlobal<OwnProps>(
     const canLeave = isSavedDialog || (isMainThread && !canSubscribe);
     const canEnterVoiceChat = ARE_CALLS_SUPPORTED && isMainThread && chat.isCallActive;
     const canCreateVoiceChat = ARE_CALLS_SUPPORTED && isMainThread && !chat.isCallActive
-      && (chat.adminRights?.manageCall || (chat.isCreator && isChatBasicGroup(chat))) && !chat.isMonoforum;
+      && getHasAdminRight(chat, 'manageCall') && !chat.isMonoforum;
     const canViewStatistics = isMainThread && chatFullInfo?.canViewStatistics;
     const canViewMonetization = isMainThread && chatFullInfo?.canViewMonetization;
     const canViewBoosts = isMainThread && !chat.isMonoforum

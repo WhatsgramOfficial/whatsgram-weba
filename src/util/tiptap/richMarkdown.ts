@@ -21,6 +21,8 @@ export const RE_RICH_MARKDOWN_LINKS = new RegExp(RICH_MARKDOWN_LINK_PATTERN, 'g'
 const RE_RICH_MARKDOWN_LINK = new RegExp(`^${RICH_MARKDOWN_LINK_PATTERN}$`);
 const RE_RICH_MARKDOWN_LINK_START = new RegExp(`^${RICH_MARKDOWN_LINK_PATTERN}`);
 const RE_RICH_MARKDOWN_ESCAPE = /\\([\x20-\x7E])/g;
+// A closing `$` before a digit indicates a currency amount
+export const RE_RICH_MARKDOWN_INLINE_MATH = /(?<![\\$])\$(?=\S)((?:\\[^\r\n]|[^\\$\r\n])+?)(?<!\s)\$(?![0-9])/;
 
 export function parseRichMarkdownLink(value: string) {
   const match = value.match(RE_RICH_MARKDOWN_LINK);
@@ -116,6 +118,20 @@ export function isRichMarkdownWebLink(markdown: RichMarkdownLink) {
   return !markdown.isImage
     && Boolean(markdown.label.trim())
     && (markdown.url.protocol === 'http:' || markdown.url.protocol === 'https:');
+}
+
+export function escapeRichMarkdownLabel(value: string | number | undefined) {
+  return String(value ?? '')
+    .replaceAll('\\', '\\\\')
+    .replaceAll('[', '\\[')
+    .replaceAll(']', '\\]');
+}
+
+export function escapeRichMarkdownHtml(value: string) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
 }
 
 function buildRichMarkdownLink(label: string, href: string, isImage: boolean): RichMarkdownLink | undefined {

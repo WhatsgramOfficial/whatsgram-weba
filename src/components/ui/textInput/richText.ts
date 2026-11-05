@@ -5,21 +5,27 @@ import type {
   ApiInputRichMessage,
   ApiMessageEntity,
   ApiPageBlock,
+  ApiPageCaption,
   ApiPageListItem,
   ApiPageListOrderedItem,
   ApiPageTableCell,
+  ApiRichButton,
   ApiRichText,
   ApiRichTextDate,
 } from '../../../api/types';
 import type { FormattedDateEntityOptions } from '../../../util/dates/formattedDate';
 import { ApiMessageEntityTypes } from '../../../api/types';
 
+import {
+  canAuthorButton, getRichMessageButtons, MAX_BUTTONS_PER_ROW, normalizeButtonText,
+} from '../../../global/helpers/buttons';
 import { getRichTextPlainText, hasRichText } from '../../../global/helpers/richMessage';
 import {
   getDefaultFormattedDateText,
   hasFormattedDateFormat,
 } from '../../../util/dates/formattedDate';
 import { getTranslationFn } from '../../../util/localization';
+import { formatDateTime } from '../../../util/localization/dateFormat';
 import {
   BLOCKQUOTE_COLLAPSED_ATTR,
   CAPTION_NODE_NAME,
@@ -27,11 +33,28 @@ import {
   FOOTER_NODE_NAME,
   MATH_BLOCK_NODE_NAME,
   MATH_INLINE_NODE_NAME,
+  MEDIA_NODE_NAME,
   TABLE_CELL_HIGHLIGHT_ATTR,
   TABLE_TITLE_NODE_NAME,
   TABLE_WRAPPER_NODE_NAME,
   UNSUPPORTED_NODE_NAME,
 } from '../../../util/tiptap/constants';
+import {
+  buildButtonAction,
+  buildButtonAttrs,
+  BUTTON_ROW_NODE_NAME,
+  getButtonColor,
+  getButtonRowAlign,
+  RICH_BUTTON_NODE_NAME,
+} from '../../../util/tiptap/richButton';
+import {
+  buildRichMediaItemBlock,
+  EMPTY_RICH_MEDIA_CAPTION,
+  getRichEditorMediaAttrs,
+  registerRichMedia,
+  type RichEditorMediaAttrs,
+  type RichEditorMediaItem,
+} from '../../../util/tiptap/richMedia';
 
 type InlineEntityType =
   ApiMessageEntityTypes.Bold
@@ -57,8 +80,12 @@ type OrderedListBlock = Extract<ApiPageBlock, { type: 'orderedList' }>;
 type RichInputFormatOptions = {
   isApproximate?: boolean;
 };
+type RichMessageToTiptapOptions = {
+  isForCopy?: boolean;
+};
 
 const BLOCK_SEPARATOR = '\n';
+const AUTHOR_DATE_SEPARATOR = ' \u00B7 ';
 const TABLE_CELL_SEPARATOR = ' ';
 const LIST_ITEM_INDENT = '  ';
 const BULLET_LIST_PREFIX = '- ';
@@ -80,7 +107,9 @@ const DETAILS_CONTENT_NODE_TYPE = 'detailsContent';
 const DETAILS_OPEN_ATTR = 'open';
 const TABLE_BORDERED_ATTR = 'isBordered';
 const TABLE_STRIPED_ATTR = 'isStriped';
+const TABLE_COMPACT_ATTR = 'isCompact';
 const TRAILING_ENTITY_WHITESPACE_RE = /\s/u;
+const MILLISECONDS_PER_SECOND = 1000;
 // Keep these values aligned with TDLib's `MessageEntity::get_type_priority`
 // https://github.com/tdlib/td/blob/master/td/telegram/MessageEntity.cpp
 const ENTITY_PRIORITY_BY_TYPE: Partial<Record<ApiMessageEntityTypes, number>> = {
@@ -140,30 +169,25 @@ export function getRichInputAsFormatted(
 }
 
 export function isValidInputRichMessage(value: ApiInputRichMessage) {
-  return Boolean(value.blocks.length) && !hasUnsupportedRichBlocks(value);
+  return Boolean(value.blocks.length) && !hasUnsupportedRichBlocks(value)
+    && getRichMessageButtons(value).every(({ action }) => Boolean(buildButtonAction(buildButtonAttrs(action))));
 }
 
 export function buildRichMessageFromTiptapJson(doc: TiptapJsonContent): ApiInputRichMessage {
   return { blocks: buildBlocksFromTiptapContent(doc.content) };
 }
 
-export function buildTiptapJsonFromRichMessage(value?: ApiInputRichMessage): TiptapJsonContent {
+export function buildTiptapJsonFromRichMessage(
+  value?: ApiInputRichMessage,
+  options?: RichMessageToTiptapOptions,
+): TiptapJsonContent {
   const content = value?.blocks
-    .flatMap(buildTiptapNodesFromBlock);
+    .flatMap((block) => buildTiptapNodesFromBlock(block, options));
 
   return {
     type: 'doc',
     content: content?.length ? content : [{ type: 'paragraph' }],
   };
-}
-
-function buildTiptapNodesFromBlock(block: ApiPageBlock): TiptapJsonContent[] {
-  if (block.type === 'paragraph') {
-    return buildTiptapParagraphNodes(block.text);
-  }
-
-  const node = buildTiptapNodeFromBlock(block);
-  return node ? [node] : [];
 }
 
 export function buildRichMessageFromFormatted(value?: ApiFormattedText): ApiInputRichMessage {
@@ -189,6 +213,10 @@ export function buildRichMessageFromFormatted(value?: ApiFormattedText): ApiInpu
 
 function buildBlockFromTiptapNode(node: TiptapJsonContent): ApiPageBlock | undefined {
   switch (node.type) {
+    case BUTTON_ROW_NODE_NAME: {
+      const buttons = node.content?.map(buildRichButtonFromTiptapNode).filter(Boolean) || [];
+      return buttons.length ? { type: 'buttonRow', buttons, align: getButtonRowAlign(node.attrs?.align) } : undefined;
+    }
     case 'paragraph':
       return buildParagraphBlockFromTiptapNode(node);
     case 'heading':
@@ -220,6 +248,8 @@ function buildBlockFromTiptapNode(node: TiptapJsonContent): ApiPageBlock | undef
         type: 'math',
         source: getTiptapStringAttr(node, 'source') || DEFAULT_STRING,
       };
+    case MEDIA_NODE_NAME:
+      return buildMediaBlockFromTiptapNode(node);
     case UNSUPPORTED_NODE_NAME:
       return { type: 'unsupported' };
     default:
@@ -227,73 +257,258 @@ function buildBlockFromTiptapNode(node: TiptapJsonContent): ApiPageBlock | undef
   }
 }
 
-function buildTiptapNodeFromBlock(block: ApiPageBlock): TiptapJsonContent | undefined {
+function buildTiptapNodesFromBlock(
+  block: ApiPageBlock,
+  options?: RichMessageToTiptapOptions,
+): TiptapJsonContent[] {
   switch (block.type) {
+    case 'buttonRow': {
+      const content = block.buttons.filter((button) => canAuthorButton(button.action)).map(buildTiptapButtonNode);
+      return content.length ? [{ type: BUTTON_ROW_NODE_NAME, attrs: { align: block.align }, content }] : [];
+    }
     case 'paragraph':
-      return {
-        type: 'paragraph',
-        content: buildTiptapInlineContentFromRichText(block.text),
-      };
+      return buildTiptapParagraphNodes(block.text);
+    case 'title':
     case 'header':
     case 'heading1':
-      return buildTiptapHeadingNode(block.text, 1);
+      return [buildTiptapHeadingNode(block.text, 1)];
+    case 'subtitle':
     case 'subheader':
     case 'heading2':
-      return buildTiptapHeadingNode(block.text, 2);
+      return [buildTiptapHeadingNode(block.text, 2)];
     case 'heading3':
-      return buildTiptapHeadingNode(block.text, 3);
+      return [buildTiptapHeadingNode(block.text, 3)];
     case 'heading4':
-      return buildTiptapHeadingNode(block.text, 4);
+      return [buildTiptapHeadingNode(block.text, 4)];
     case 'heading5':
-      return buildTiptapHeadingNode(block.text, 5);
+      return [buildTiptapHeadingNode(block.text, 5)];
     case 'heading6':
-      return buildTiptapHeadingNode(block.text, 6);
+      return [buildTiptapHeadingNode(block.text, 6)];
+    case 'kicker':
+    case 'thinking':
+      return buildTiptapParagraphNodes(block.text);
+    case 'authorDate':
+      return buildTiptapParagraphNodes(buildAuthorDateRichText(block));
     case 'footer':
-      return {
+      return [{
         type: FOOTER_NODE_NAME,
         content: buildTiptapInlineContentFromRichText(block.text),
-      };
+      }];
     case 'blockquote':
-      return {
+      return [{
         type: 'blockquote',
         attrs: {
           [BLOCKQUOTE_COLLAPSED_ATTR]: block.canCollapse,
         },
         content: buildTiptapQuoteContent([buildTiptapParagraphNode(block.text)], block.caption),
-      };
+      }];
     case 'blockquoteBlocks':
-      return buildTiptapBlockquoteBlocksNode(block);
+      return [buildTiptapBlockquoteBlocksNode(block, options)];
     case 'pullquote':
-      return {
+      return [{
         type: 'pullquote',
         content: buildTiptapQuoteContent(buildTiptapParagraphNodes(block.text), block.caption),
-      };
+      }];
     case 'preformatted':
-      return {
+      return [{
         type: 'codeBlock',
         attrs: { language: block.language || undefined },
         content: buildTiptapCodeBlockContent(getRichTextPlainText(block.text)),
-      };
+      }];
     case 'divider':
-      return { type: 'horizontalRule' };
+      return [{ type: 'horizontalRule' }];
     case 'list':
-      return buildTiptapListNode(block.items, 'bulletList');
+      return buildOptionalTiptapNode(buildTiptapListNode(block.items, 'bulletList', options));
     case 'orderedList':
-      return buildTiptapListNode(block.items, 'orderedList', block);
+      return buildOptionalTiptapNode(buildTiptapListNode(block.items, 'orderedList', options, block));
     case 'table':
-      return buildTiptapTableWrapperNode(block);
+      return buildOptionalTiptapNode(buildTiptapTableWrapperNode(block));
     case 'details':
-      return buildTiptapDetailsNode(block);
+      return [buildTiptapDetailsNode(block, options)];
     case 'math':
-      return {
+      return [{
         type: MATH_BLOCK_NODE_NAME,
         attrs: { source: block.source },
-      };
+      }];
+    case 'photo':
+    case 'video':
+    case 'audio':
+    case 'document':
+    case 'collage':
+    case 'slideshow':
+      return buildOptionalTiptapNode(buildTiptapMediaNode(block));
+    case 'anchor':
     case 'unsupported':
-      return { type: UNSUPPORTED_NODE_NAME };
+      return options?.isForCopy ? [] : [{ type: UNSUPPORTED_NODE_NAME }];
     default:
-      return { type: UNSUPPORTED_NODE_NAME };
+      return options?.isForCopy
+        ? buildTiptapMediaFallbackNodes(block, options)
+        : [{ type: UNSUPPORTED_NODE_NAME }];
   }
+}
+
+function buildMediaBlockFromTiptapNode(node: TiptapJsonContent): ApiPageBlock | undefined {
+  const attrs = getRichEditorMediaAttrs(node);
+  if (!attrs) {
+    return undefined;
+  }
+
+  const items = attrs.items.flatMap((item) => {
+    const block = buildRichMediaItemBlock(item);
+    return block ? [block] : [];
+  });
+  const caption: ApiPageCaption = {
+    text: buildRichTextFromTiptapContent(node.content),
+    credit: attrs.credit,
+  };
+  if (!items.length) {
+    return hasRichText(caption.text) ? { type: 'paragraph', text: caption.text } : undefined;
+  }
+
+  if (items.length === 1 && attrs.kind !== 'collage' && attrs.kind !== 'slideshow') {
+    return { ...items[0], caption };
+  }
+
+  return {
+    type: attrs.kind === 'slideshow' ? 'slideshow' : 'collage',
+    items,
+    caption,
+  };
+}
+
+function buildTiptapMediaNode(
+  block: Extract<ApiPageBlock, { type: 'photo' | 'video' | 'audio' | 'document' | 'collage' | 'slideshow' }>,
+): TiptapJsonContent | undefined {
+  const items = buildRichEditorMediaItems(block);
+  if (!items?.length) {
+    return undefined;
+  }
+
+  const caption = block.caption;
+  const attrs: RichEditorMediaAttrs = {
+    kind: block.type,
+    items,
+    credit: caption.credit,
+  };
+  return {
+    type: MEDIA_NODE_NAME,
+    attrs,
+    content: buildTiptapInlineContentFromRichText(caption.text),
+  };
+}
+
+function buildRichEditorMediaItems(
+  block: Extract<ApiPageBlock, { type: 'photo' | 'video' | 'audio' | 'document' | 'collage' | 'slideshow' }>,
+): RichEditorMediaItem[] | undefined {
+  const isGroup = block.type === 'collage' || block.type === 'slideshow';
+  const items = (isGroup ? block.items : [block]).map((item): RichEditorMediaItem | undefined => {
+    if (!isGroup && item.type === 'audio') {
+      registerRichMedia(item.audio);
+      return { type: 'audio', media: item.audio, caption: EMPTY_RICH_MEDIA_CAPTION };
+    }
+    if (!isGroup && item.type === 'document') {
+      registerRichMedia(item.document);
+      return { type: 'document', media: item.document, caption: EMPTY_RICH_MEDIA_CAPTION };
+    }
+    if (item.type === 'photo') {
+      registerRichMedia(item.photo);
+      return {
+        type: 'photo',
+        media: item.photo,
+        caption: isGroup ? item.caption : EMPTY_RICH_MEDIA_CAPTION,
+        isSpoiler: item.isSpoiler,
+        url: item.url,
+        webPageId: item.webPageId,
+      };
+    }
+    if (item.type === 'video') {
+      registerRichMedia(item.video);
+      return {
+        type: 'video',
+        media: item.video,
+        caption: isGroup ? item.caption : EMPTY_RICH_MEDIA_CAPTION,
+        isSpoiler: item.isSpoiler,
+        isAutoplay: item.isAutoplay,
+        isLoop: item.isLoop,
+      };
+    }
+    return undefined;
+  });
+
+  return items.every((item): item is RichEditorMediaItem => Boolean(item)) ? items : undefined;
+}
+
+function buildOptionalTiptapNode(node: TiptapJsonContent | undefined) {
+  return node ? [node] : [];
+}
+
+function buildTiptapMediaFallbackNodes(
+  block: ApiPageBlock,
+  options: RichMessageToTiptapOptions,
+): TiptapJsonContent[] {
+  switch (block.type) {
+    case 'photo':
+    case 'video':
+    case 'audio':
+    case 'document':
+    case 'embed':
+    case 'map':
+      return buildTiptapCaptionNodes(block.caption);
+    case 'cover':
+      return buildTiptapNodesFromBlock(block.cover, options);
+    case 'embedPost':
+      return [
+        ...(block.author ? buildTiptapParagraphNodes(buildPlainRichText(block.author)) : []),
+        ...block.blocks.flatMap((nestedBlock) => buildTiptapNodesFromBlock(nestedBlock, options)),
+        ...buildTiptapCaptionNodes(block.caption),
+      ];
+    case 'collage':
+    case 'slideshow':
+      return [
+        ...block.items.flatMap((item) => buildTiptapNodesFromBlock(item, options)),
+        ...buildTiptapCaptionNodes(block.caption),
+      ];
+    case 'relatedArticles':
+      return [
+        ...(hasRichText(block.title) ? [buildTiptapHeadingNode(block.title, 3)] : []),
+        ...block.articles.flatMap((article) => {
+          const text = [article.title || article.url, article.description, article.author].filter(Boolean).join('\n');
+          return text ? buildTiptapParagraphNodes(buildPlainRichText(text)) : [];
+        }),
+      ];
+    case 'channel':
+      return block.title ? buildTiptapParagraphNodes(buildPlainRichText(block.title)) : [];
+    default:
+      return [];
+  }
+}
+
+function buildTiptapCaptionNodes(caption: ApiPageCaption): TiptapJsonContent[] {
+  return [
+    ...(hasRichText(caption.text) ? buildTiptapParagraphNodes(caption.text) : []),
+    ...(hasRichText(caption.credit) ? [{
+      type: FOOTER_NODE_NAME,
+      content: buildTiptapInlineContentFromRichText(caption.credit),
+    }] : []),
+  ];
+}
+
+function buildAuthorDateRichText(block: Extract<ApiPageBlock, { type: 'authorDate' }>): ApiRichText {
+  const texts: ApiRichText[] = [];
+  if (hasRichText(block.author)) texts.push(block.author);
+  if (block.publishedDate) {
+    if (texts.length) texts.push(buildPlainRichText(AUTHOR_DATE_SEPARATOR));
+    texts.push(buildPlainRichText(formatDateTime(
+      getTranslationFn(),
+      new Date(block.publishedDate * MILLISECONDS_PER_SECOND),
+      { date: 'long', time: 'short' },
+    )));
+  }
+  return buildConcatRichText(texts);
+}
+
+function buildPlainRichText(text: string): ApiRichText {
+  return text ? { type: 'plain', text } : EMPTY_RICH_TEXT;
 }
 
 function buildTiptapHeadingNode(text: ApiRichText, level: number): TiptapJsonContent {
@@ -398,6 +613,7 @@ function buildTiptapTableWrapperNode(
 function buildTiptapListNode(
   items: ApiPageListItem[] | ApiPageListOrderedItem[],
   type: 'bulletList' | 'orderedList',
+  options?: RichMessageToTiptapOptions,
   orderedList?: OrderedListBlock,
 ): TiptapJsonContent | undefined {
   const content = items.map((item) => ({
@@ -406,7 +622,7 @@ function buildTiptapListNode(
       [LIST_ITEM_CHECKBOX_ATTR]: true,
       [LIST_ITEM_CHECKED_ATTR]: Boolean(item.isChecked),
     } : undefined,
-    content: buildTiptapListItemContent(item),
+    content: buildTiptapListItemContent(item, options),
   })).filter((item) => item.content.length);
 
   return content.length ? {
@@ -416,14 +632,16 @@ function buildTiptapListNode(
   } : undefined;
 }
 
-function buildTiptapListItemContent(item: ApiPageListItem | ApiPageListOrderedItem): TiptapJsonContent[] {
+function buildTiptapListItemContent(
+  item: ApiPageListItem | ApiPageListOrderedItem,
+  options?: RichMessageToTiptapOptions,
+): TiptapJsonContent[] {
   if (item.type === 'text') {
     return [buildTiptapParagraphNode(item.text)];
   }
 
   const content = item.blocks
-    .map(buildTiptapNodeFromBlock)
-    .filter((node): node is TiptapJsonContent => Boolean(node));
+    .flatMap((block) => buildTiptapNodesFromBlock(block, options));
   if (!content.length) {
     return [];
   }
@@ -455,7 +673,9 @@ function areListItemsCheckboxes(items: ApiPageListItem[] | ApiPageListOrderedIte
   return Boolean(items.length) && items.every((item) => item.isCheckbox);
 }
 
-function buildTiptapTableNode(block: Extract<ApiPageBlock, { type: 'table' }>): TiptapJsonContent | undefined {
+function buildTiptapTableNode(
+  block: Extract<ApiPageBlock, { type: 'table' }>,
+): TiptapJsonContent | undefined {
   const content = block.rows.map((row) => ({
     type: 'tableRow',
     content: row.cells.map((cell) => ({
@@ -476,6 +696,7 @@ function buildTiptapTableNode(block: Extract<ApiPageBlock, { type: 'table' }>): 
     attrs: {
       [TABLE_BORDERED_ATTR]: Boolean(block.isBordered),
       [TABLE_STRIPED_ATTR]: Boolean(block.isStriped),
+      [TABLE_COMPACT_ATTR]: Boolean(block.isCompact),
     },
     content,
   } : undefined;
@@ -497,10 +718,12 @@ function buildTiptapTableCellVerticalAlign(cell: ApiPageTableCell) {
   return cell.verticalAlignBottom ? 'bottom' : undefined;
 }
 
-function buildTiptapDetailsNode(block: Extract<ApiPageBlock, { type: 'details' }>): TiptapJsonContent {
+function buildTiptapDetailsNode(
+  block: Extract<ApiPageBlock, { type: 'details' }>,
+  options?: RichMessageToTiptapOptions,
+): TiptapJsonContent {
   const content = block.blocks
-    .map(buildTiptapNodeFromBlock)
-    .filter((node): node is TiptapJsonContent => Boolean(node));
+    .flatMap((nestedBlock) => buildTiptapNodesFromBlock(nestedBlock, options));
 
   return {
     type: 'details',
@@ -519,16 +742,13 @@ function buildTiptapDetailsNode(block: Extract<ApiPageBlock, { type: 'details' }
 
 function buildTiptapBlockquoteBlocksNode(
   block: Extract<ApiPageBlock, { type: 'blockquoteBlocks' }>,
+  options?: RichMessageToTiptapOptions,
 ): TiptapJsonContent {
   const content = block.blocks
-    .map(buildTiptapNodeFromBlock)
-    .filter((node): node is TiptapJsonContent => Boolean(node));
+    .flatMap((nestedBlock) => buildTiptapNodesFromBlock(nestedBlock, options));
 
   return {
     type: 'blockquote',
-    attrs: {
-      [BLOCKQUOTE_COLLAPSED_ATTR]: block.canCollapse,
-    },
     content: buildTiptapQuoteContent(
       content.length ? content : [{ type: 'paragraph' }],
       block.caption,
@@ -536,8 +756,13 @@ function buildTiptapBlockquoteBlocksNode(
   };
 }
 
-function buildTiptapInlineContentFromRichText(text: ApiRichText, marks: TiptapMark[] = []): TiptapJsonContent[] {
+export function buildTiptapInlineContentFromRichText(
+  text: ApiRichText,
+  marks: TiptapMark[] = [],
+): TiptapJsonContent[] {
   switch (text.type) {
+    case 'button':
+      return canAuthorButton(text.action) ? [buildTiptapButtonNode(text)] : [];
     case 'empty':
       return [];
     case 'plain':
@@ -566,6 +791,16 @@ function buildTiptapInlineContentFromRichText(text: ApiRichText, marks: TiptapMa
       return buildTiptapInlineContentFromRichText(text.text, [...marks, {
         type: 'link',
         attrs: { href: text.url },
+      }]);
+    case 'email':
+      return buildTiptapInlineContentFromRichText(text.text, [...marks, {
+        type: 'link',
+        attrs: { href: `mailto:${text.email}` },
+      }]);
+    case 'phone':
+      return buildTiptapInlineContentFromRichText(text.text, [...marks, {
+        type: 'link',
+        attrs: { href: `tel:${text.phone}` },
       }]);
     case 'mention':
       return buildTiptapMentionNodes(text);
@@ -658,6 +893,7 @@ function getNestedSupportedRichText(text: ApiRichText): ApiRichText {
     case 'autoEmail':
     case 'autoPhone':
     case 'bankCard':
+    case 'tonAddress':
       return text.text;
     default:
       return EMPTY_RICH_TEXT;
@@ -724,7 +960,6 @@ function buildBlockquoteBlockFromTiptapNode(node: TiptapJsonContent): ApiPageBlo
     type: 'blockquoteBlocks',
     blocks,
     caption,
-    canCollapse,
   } : undefined;
 }
 
@@ -863,7 +1098,9 @@ function buildBlocksFromTiptapContent(content?: TiptapJsonContent[]) {
     .filter((block): block is ApiPageBlock => Boolean(block)) || []);
 }
 
-function isSimpleListItemContent(blocks: ApiPageBlock[]): blocks is [Extract<ApiPageBlock, { type: 'paragraph' }>] {
+function isSimpleListItemContent(
+  blocks: ApiPageBlock[],
+): blocks is [Extract<ApiPageBlock, { type: 'paragraph' }>] {
   return blocks.length === 1 && blocks[0].type === 'paragraph';
 }
 
@@ -899,6 +1136,7 @@ function buildTableBlockFromTiptapNode(node: TiptapJsonContent): ApiPageBlock | 
     rows,
     isBordered: getTiptapBooleanAttr(tableNode!, TABLE_BORDERED_ATTR) ? true : undefined,
     isStriped: getTiptapBooleanAttr(tableNode!, TABLE_STRIPED_ATTR) ? true : undefined,
+    isCompact: getTiptapBooleanAttr(tableNode!, TABLE_COMPACT_ATTR) ? true : undefined,
   } : undefined;
 }
 
@@ -950,11 +1188,16 @@ function buildRichTextFromTiptapParagraphs(content?: TiptapJsonContent[]): ApiRi
   return buildConcatRichText(textsWithSeparators);
 }
 
-function buildRichTextFromTiptapContent(content?: TiptapJsonContent[]): ApiRichText {
+export function buildRichTextFromTiptapContent(content?: TiptapJsonContent[]): ApiRichText {
   return buildConcatRichText(content?.map(buildRichTextFromTiptapNode) || []);
 }
 
 function buildRichTextFromTiptapNode(node: TiptapJsonContent): ApiRichText {
+  if (node.type === RICH_BUTTON_NODE_NAME) {
+    const button = buildRichButtonFromTiptapNode(node);
+    return button ? { type: 'button', ...button } : EMPTY_RICH_TEXT;
+  }
+
   if (node.type === 'text') {
     return applyTiptapMarks({ type: 'plain', text: node.text || DEFAULT_STRING }, node.marks);
   }
@@ -1150,9 +1393,15 @@ function getTiptapMarkNumberAttr(mark: TiptapMark, name: string): number | undef
 
 function hasUnsupportedRichBlock(block: ApiPageBlock): boolean {
   switch (block.type) {
+    case 'buttonRow':
+      return !block.buttons.length || block.buttons.length > MAX_BUTTONS_PER_ROW
+        || block.buttons.some((button) => !canAuthorButton(button.action));
     case 'blockquoteBlocks':
     case 'details':
       return block.blocks.some(hasUnsupportedRichBlock);
+    case 'collage':
+    case 'slideshow':
+      return block.items.some(hasUnsupportedRichBlock);
     case 'list':
       return block.items.some((item) => item.type === 'blocks' && item.blocks.some(hasUnsupportedRichBlock));
     case 'orderedList':
@@ -1165,6 +1414,10 @@ function hasUnsupportedRichBlock(block: ApiPageBlock): boolean {
     case 'divider':
     case 'blockquote':
     case 'pullquote':
+    case 'photo':
+    case 'video':
+    case 'audio':
+    case 'document':
     case 'table':
     case 'heading1':
     case 'heading2':
@@ -1181,6 +1434,10 @@ function hasUnsupportedRichBlock(block: ApiPageBlock): boolean {
 
 function getBlockAsFormatted(block: ApiPageBlock, isApproximate: boolean): ApiFormattedText | undefined {
   switch (block.type) {
+    case 'buttonRow':
+      return isApproximate ? {
+        text: block.buttons.map((button) => getRichTextPlainText(button.text)).join(' '),
+      } : undefined;
     case 'paragraph':
       return getRichTextAsFormatted(block.text, isApproximate);
     case 'header':
@@ -1234,7 +1491,6 @@ function getBlockAsFormatted(block: ApiPageBlock, isApproximate: boolean): ApiFo
         type: ApiMessageEntityTypes.Blockquote,
         offset: 0,
         length: withCaption.text.length,
-        canCollapse: block.canCollapse,
       }) : undefined;
     }
     case 'pullquote':
@@ -1256,9 +1512,26 @@ function getBlockAsFormatted(block: ApiPageBlock, isApproximate: boolean): ApiFo
         length: block.source.length,
         language: LATEX_CODE_LANGUAGE,
       }) : undefined;
+    case 'photo':
+    case 'video':
+    case 'audio':
+    case 'document':
+    case 'collage':
+    case 'slideshow':
+      return isApproximate ? getMediaCaptionAsFormatted(block.caption) : undefined;
     default:
       return undefined;
   }
+}
+
+function getMediaCaptionAsFormatted(caption: ApiPageCaption) {
+  const text = getRichTextAsFormatted(caption.text, true);
+  const credit = getRichTextAsFormatted(caption.credit, true);
+  if (!text || !credit) {
+    return undefined;
+  }
+
+  return credit.text ? appendFormattedSections(text, credit) : text;
 }
 
 function getBlockquoteAsFormatted(
@@ -1392,7 +1665,9 @@ function prefixFormattedLines(
   };
 }
 
-function getDetailsAsFormatted(block: Extract<ApiPageBlock, { type: 'details' }>): ApiFormattedText | undefined {
+function getDetailsAsFormatted(
+  block: Extract<ApiPageBlock, { type: 'details' }>,
+): ApiFormattedText | undefined {
   const title = getNestedRichTextAsFormatted(block.title, ApiMessageEntityTypes.Bold, true);
   const content = getBlocksAsFormatted(block.blocks, true);
   if (!title || !content) {
@@ -1467,6 +1742,8 @@ function joinFormattedTexts(parts: ApiFormattedText[], separator: string): ApiFo
 
 function getRichTextAsFormatted(text: ApiRichText, isApproximate: boolean): ApiFormattedText | undefined {
   switch (text.type) {
+    case 'button':
+      return isApproximate ? getRichTextAsFormatted(text.text, true) : undefined;
     case 'empty':
       return { text: '' };
     case 'plain':
@@ -1542,7 +1819,10 @@ function getNestedRichTextAsFormatted(
   });
 }
 
-function wrapFormattedTextWithEntity(formatted: ApiFormattedText, entity: ApiMessageEntity): ApiFormattedText {
+function wrapFormattedTextWithEntity(
+  formatted: ApiFormattedText,
+  entity: ApiMessageEntity,
+): ApiFormattedText {
   return {
     ...formatted,
     entities: formatted.text ? [{
@@ -1818,7 +2098,6 @@ function buildStructuralBlockFromFormatted(
     type: 'blockquoteBlocks',
     blocks: buildBlocksFromFormattedRange(text, entities, entity.offset, end, preEntities),
     caption: EMPTY_RICH_TEXT,
-    canCollapse: entity.canCollapse ? true : undefined,
   } : {
     type: 'blockquote',
     text: buildRichTextFromFormatted(text, entities, entity.offset, end),
@@ -1973,5 +2252,24 @@ function buildFormattedDateOptionsFromTiptapNode(node: TiptapJsonContent): Forma
     longDate: getTiptapBooleanAttr(node, 'longDate') ? true : undefined,
     shortTime: getTiptapBooleanAttr(node, 'shortTime') ? true : undefined,
     longTime: getTiptapBooleanAttr(node, 'longTime') ? true : undefined,
+  };
+}
+
+function buildTiptapButtonNode(button: ApiRichButton): TiptapJsonContent {
+  return {
+    type: RICH_BUTTON_NODE_NAME,
+    attrs: buildButtonAttrs(button.action, button.style),
+    content: buildTiptapInlineContentFromRichText(normalizeButtonText(button.text)),
+  };
+}
+
+function buildRichButtonFromTiptapNode(node: TiptapJsonContent): ApiRichButton | undefined {
+  const action = node.attrs?.buttonType === 'url' && !node.attrs.url
+    ? { type: 'url' as const, url: '' } : buildButtonAction(node.attrs);
+  if (!action) return undefined;
+  return {
+    action,
+    text: normalizeButtonText(buildRichTextFromTiptapContent(node.content)),
+    style: { type: getButtonColor(node.attrs?.color) },
   };
 }

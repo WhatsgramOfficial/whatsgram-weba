@@ -104,7 +104,6 @@
 
     body.no-page-transitions & {
       &,
-      .AudioPlayer,
       .HeaderActions {
         transition: none !important;
       }
@@ -214,6 +213,10 @@
     width: 2.5rem !important;
     height: 2.5rem !important;
     margin-right: 0.625rem;
+  }
+
+  .ChatInfo .Avatar.forum {
+    --border-radius-forum-avatar: 40%;
   }
 
   .topic-header-icon {

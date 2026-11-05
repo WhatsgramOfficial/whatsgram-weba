@@ -1,4 +1,3 @@
-import type { MouseEvent as ReactMouseEvent } from 'react';
 import type { ElementRef, TeactNode } from '../../lib/teact/teact';
 import { useRef, useState } from '../../lib/teact/teact';
 
@@ -8,8 +7,9 @@ import { IS_TOUCH_ENV, MouseButton } from '../../util/browser/windowEnvironment'
 import buildClassName from '../../util/buildClassName';
 import buildStyle from '../../util/buildStyle';
 
+import { useFileHoverOpenHandler } from '../../hooks/useFileHoverOpen';
+import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
-import useOldLang from '../../hooks/useOldLang';
 
 import Icon from '../common/icons/Icon';
 import Sparkles from '../common/Sparkles';
@@ -58,6 +58,7 @@ export type OwnProps = {
   withSparkleEffect?: boolean;
   noSparkleAnimation?: boolean;
   noPreventDefault?: boolean;
+  noClickTransitionReset?: boolean;
   noForcedUpperCase?: boolean;
   shouldStopPropagation?: boolean;
   style?: string;
@@ -66,14 +67,15 @@ export type OwnProps = {
   iconAlignment?: 'top' | 'bottom' | 'start' | 'end';
   iconClassName?: string;
   iconHasPremiumBadge?: boolean;
-  onClick?: (e: ReactMouseEvent<HTMLButtonElement, MouseEvent>) => void;
-  onContextMenu?: (e: ReactMouseEvent<HTMLButtonElement, MouseEvent>) => void;
-  onMouseDown?: (e: ReactMouseEvent<HTMLButtonElement>) => void;
-  onMouseUp?: (e: ReactMouseEvent<HTMLButtonElement>) => void;
-  onMouseEnter?: (e: ReactMouseEvent<HTMLButtonElement>) => void;
+  onClick?: (e: React.MouseEvent<HTMLButtonElement, MouseEvent>) => void;
+  onContextMenu?: (e: React.MouseEvent<HTMLButtonElement, MouseEvent>) => void;
+  onMouseDown?: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  onMouseUp?: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  onMouseEnter?: (e: React.MouseEvent<HTMLButtonElement>) => void;
   onMouseLeave?: NoneToVoidFunction;
   onFocus?: NoneToVoidFunction;
   onTransitionEnd?: NoneToVoidFunction;
+  onFileHoverOpen?: NoneToVoidFunction;
 };
 
 // Longest animation duration;
@@ -115,6 +117,7 @@ const Button = ({
   isRtl,
   isRectangular,
   noPreventDefault,
+  noClickTransitionReset,
   shouldStopPropagation,
   noForcedUpperCase,
   style,
@@ -131,15 +134,17 @@ const Button = ({
   onMouseLeave,
   onFocus,
   onTransitionEnd,
+  onFileHoverOpen,
 }: OwnProps) => {
   let elementRef = useRef<HTMLButtonElement | HTMLAnchorElement>();
   if (ref) {
     elementRef = ref;
   }
 
-  const lang = useOldLang();
+  const lang = useLang();
 
   const [isClicked, setIsClicked] = useState(false);
+  const handleFileHoverOpen = useFileHoverOpenHandler(onFileHoverOpen);
 
   const isNotInteractive = disabled || nonInteractive;
 
@@ -169,12 +174,14 @@ const Button = ({
     Boolean(iconName && children) && `content-with-icon-${iconAlignment}`,
   );
 
-  const handleClick = useLastCallback((e: ReactMouseEvent<HTMLButtonElement, MouseEvent>) => {
+  const handleClick = useLastCallback((e: React.MouseEvent<HTMLButtonElement, MouseEvent>) => {
     if ((allowDisabledClick || !isNotInteractive) && onClick) {
       onClick(e);
     }
 
     if (shouldStopPropagation) e.stopPropagation();
+
+    if (noClickTransitionReset) return;
 
     setIsClicked(true);
     setTimeout(() => {
@@ -182,7 +189,7 @@ const Button = ({
     }, CLICKED_TIMEOUT);
   });
 
-  const handleMouseDown = useLastCallback((e: ReactMouseEvent<HTMLButtonElement>) => {
+  const handleMouseDown = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     if (!noPreventDefault) e.preventDefault();
 
     if ((allowDisabledClick || !isNotInteractive) && onMouseDown) {
@@ -202,8 +209,8 @@ const Button = ({
   const renderContent = () => {
     if (isLoading) {
       return (
-        <div>
-          <span dir={isRtl ? 'auto' : undefined}>{lang('Cache.ClearProgress')}</span>
+        <div className="loading-content">
+          <span dir={isRtl ? 'auto' : undefined}>{lang('PleaseWait')}</span>
           <Spinner color={isText ? 'blue' : 'white'} />
         </div>
       );
@@ -253,6 +260,8 @@ const Button = ({
         aria-controls={ariaControls}
         style={style}
         onTransitionEnd={onTransitionEnd}
+        data-file-hover-open={onFileHoverOpen ? true : undefined}
+        onFileHoverOpen={onFileHoverOpen ? handleFileHoverOpen : undefined}
         target="_blank"
         rel="noreferrer"
       >
@@ -275,6 +284,8 @@ const Button = ({
       onMouseLeave={onMouseLeave && !isNotInteractive ? onMouseLeave : undefined}
       onTransitionEnd={onTransitionEnd}
       onFocus={onFocus && !isNotInteractive ? onFocus : undefined}
+      data-file-hover-open={onFileHoverOpen ? true : undefined}
+      onFileHoverOpen={onFileHoverOpen ? handleFileHoverOpen : undefined}
       disabled={disabled && !allowDisabledClick}
       autoFocus={autoFocus}
       aria-label={ariaLabel}

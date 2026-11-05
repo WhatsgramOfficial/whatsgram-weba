@@ -39,7 +39,7 @@ const EditableCodeBlock = ({
   const lang = useLang();
 
   const language = typeof node.attrs.language === 'string' ? node.attrs.language : undefined;
-  const languageLabel = language ? getPrettyCodeLanguageName(language) : lang('RichEditorCodeLanguageAuto');
+  const languageLabel = language ? getPrettyCodeLanguageName(lang, language) : lang('RichEditorCodeLanguageAuto');
   const isCodeBlockEmpty = !node.textContent;
   const codeBlockClassName = buildClassName(
     styles.codeBlock,
@@ -60,7 +60,12 @@ const EditableCodeBlock = ({
   useEffect(() => {
     if (language) {
       void ensureCodeLanguage(language);
+      return;
     }
+
+    SUPPORTED_CODE_LANGUAGES.forEach((langCode) => {
+      void ensureCodeLanguage(langCode);
+    });
   }, [language]);
 
   const handleTriggerMouseDown = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
@@ -193,7 +198,7 @@ const EditableCodeBlock = ({
       >
         <div className={buildClassName(styles.languageItems, 'custom-scroll')}>
           <MenuItem
-            customIcon={language ? <Icon name="placeholder" /> : <Icon name="message-succeeded" />}
+            customIcon={language ? <Icon name="placeholder" /> : <Icon name="check" />}
             withPreventDefaultOnMouseDown
             onClick={() => handleSetLanguage(undefined)}
           >
@@ -202,11 +207,11 @@ const EditableCodeBlock = ({
           {SUPPORTED_CODE_LANGUAGES.map((langCode) => (
             <MenuItem
               key={langCode}
-              customIcon={language === langCode ? <Icon name="message-succeeded" /> : <Icon name="placeholder" />}
+              customIcon={language === langCode ? <Icon name="check" /> : <Icon name="placeholder" />}
               withPreventDefaultOnMouseDown
               onClick={() => handleSetLanguage(langCode)}
             >
-              {getPrettyCodeLanguageName(langCode)}
+              {getPrettyCodeLanguageName(lang, langCode)}
             </MenuItem>
           ))}
         </div>

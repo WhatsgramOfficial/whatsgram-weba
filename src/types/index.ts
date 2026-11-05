@@ -2,6 +2,7 @@ import type { TeactNode } from '../lib/teact/teact';
 
 import type {
   ApiAttachment,
+  ApiAudio,
   ApiBotInlineMediaResult,
   ApiBotInlineResult,
   ApiBotInlineSwitchPm,
@@ -30,6 +31,8 @@ import type {
   ApiPhoto,
   ApiReaction,
   ApiReactionWithPaid,
+  ApiRichMessage,
+  ApiSessionData,
   ApiStarGiftAttributeIdBackdrop,
   ApiStarGiftAttributeIdPattern,
   ApiStarGiftRegular,
@@ -43,12 +46,14 @@ import type {
   ApiTopic,
   ApiTypingStatus,
   ApiVideo,
+  ApiVoice,
   MediaContent,
   StarGiftAttributeIdModel,
 } from '../api/types';
 import type { DC_IDS } from '../config';
 import type { SearchResultKey } from '../util/keys/searchResultKey';
 import type { IconName } from './icons';
+import type { RegularLangKey } from './language';
 
 export type TextPart = TeactNode;
 
@@ -68,6 +73,8 @@ export type SessionUserInfo = {
 export type SharedSessionData = {
   date?: number;
   dcId: number;
+  authKeyCreatedAt?: ApiSessionData['authKeyCreatedAt'];
+  tempAuthKey?: ApiSessionData['tempAuthKey'];
   isTest?: true;
 } & Partial<Record<`dc${DcId}_${'auth_key' | 'server_salt'}`, string>> & SessionUserInfo;
 
@@ -118,7 +125,7 @@ export type AnimationLevel = 0 | 1 | 2;
 export type FoldersPosition = 'top' | 'left';
 export type PerformanceTypeKey = (
   'pageTransitions' | 'messageSendingAnimations' | 'mediaViewerAnimations'
-  | 'messageComposerAnimations' | 'contextMenuAnimations' | 'contextMenuBlur' | 'messageBlur'
+  | 'messageComposerAnimations' | 'contextMenuAnimations' | 'contextMenuBlur'
   | 'rightColumnAnimations' | 'animatedEmoji' | 'loopAnimatedStickers' | 'reactionEffects' | 'stickerEffects'
   | 'autoplayGifs' | 'autoplayVideos' | 'storyRibbonAnimations' | 'snapEffect' | 'textStreaming'
 );
@@ -174,6 +181,7 @@ export interface AccountSettings {
   canChangeSensitive?: boolean;
   shouldArchiveAndMuteNewNonContact?: boolean;
   shouldNewNonContactPeersRequirePremium?: boolean;
+  defaultHistoryTtl?: number;
   nonContactPeersPaidStars?: number;
   shouldDisplayGiftsButton?: boolean;
   disallowedGifts?: ApiDisallowedGiftsSettings;
@@ -200,8 +208,14 @@ export interface ShippingOption {
   prices: ApiLabeledPrice[];
 }
 
+export type SettingsHighlight = {
+  langKey: RegularLangKey;
+  isInHeaderMenu?: boolean;
+};
+
 export enum SettingsScreens {
   Main,
+  Search,
   EditProfile,
   Notifications,
   DataStorage,
@@ -211,6 +225,7 @@ export enum SettingsScreens {
   GeneralChatBackground,
   GeneralChatBackgroundColor,
   Privacy,
+  AutoDeleteMessages,
   PrivacyPhoneNumber,
   PrivacyAddByPhone,
   PrivacyLastSeen,
@@ -218,6 +233,7 @@ export enum SettingsScreens {
   PrivacyBio,
   PrivacyBirthday,
   PrivacyGifts,
+  PrivacySavedMusic,
   PrivacyPhoneCall,
   PrivacyPhoneP2P,
   PrivacyForwarding,
@@ -236,6 +252,8 @@ export enum SettingsScreens {
   PrivacyBirthdayDeniedContacts,
   PrivacyGiftsAllowedContacts,
   PrivacyGiftsDeniedContacts,
+  PrivacySavedMusicAllowedContacts,
+  PrivacySavedMusicDeniedContacts,
   PrivacyPhoneCallAllowedContacts,
   PrivacyPhoneCallDeniedContacts,
   PrivacyPhoneP2PAllowedContacts,
@@ -282,6 +300,8 @@ export enum SettingsScreens {
   PasscodeChangePasscodeCurrent,
   PasscodeChangePasscodeNew,
   PasscodeChangePasscodeConfirm,
+  PasscodePasskeyAddConfirm,
+  PasscodePasskeyRemoveConfirm,
   PasscodeTurnOff,
   PasscodeCongratulations,
   Experimental,
@@ -329,8 +349,6 @@ export enum RightColumnContent {
   BoostStatistics,
   MessageStatistics,
   StoryStatistics,
-  StickerSearch,
-  GifSearch,
   PollResults,
   AddingMembers,
   CreateTopic,
@@ -353,6 +371,7 @@ export type MediaViewerPageMedia = {
 
 export enum MediaViewerOrigin {
   Inline,
+  Ephemeral,
   ScheduledInline,
   SharedMedia,
   ProfileAvatar,
@@ -378,12 +397,49 @@ export enum StoryViewerOrigin {
   SearchResult,
 }
 
-export enum AudioOrigin {
-  Inline,
-  SharedMedia,
-  Search,
-  OneTimeModal,
-}
+export type AudioVariant = 'inline' | 'sharedMedia' | 'search' | 'attachment' | 'oneTimeModal';
+
+export type PlaybackMediaType = 'audio' | 'voice';
+
+export type PlaybackSource =
+  | { type: 'chat'; chatId: string; threadId: ThreadId; mediaType: PlaybackMediaType }
+  | { type: 'globalSearch'; mediaType: PlaybackMediaType }
+  | { type: 'savedMusic'; peerId: string }
+  | { type: 'richMessage'; chatId: string; threadId: ThreadId; messageId: number }
+  | { type: 'single' };
+
+export type PlaybackContextType = 'message' | 'savedMusic' | 'instantView' | 'musicSearch';
+
+export type PlaybackMedia = ApiAudio | ApiVoice | ApiVideo;
+
+export type PlaybackItemRef =
+  // `documentId` targets an audio block inside a rich message
+  | {
+    type: 'message'; chatId: string; threadId: ThreadId; messageId: number;
+    documentId?: string; isScheduled?: boolean;
+  }
+  | { type: 'savedMusic'; peerId: string; audioId: string }
+  | { type: 'instantView'; webPageId: string; documentId: string }
+  | { type: 'musicSearch'; audioId: string };
+
+export type PlaybackCapabilities = {
+  canSeek: boolean;
+  mediaSession: 'own' | 'keep' | 'clear';
+  withAutoAdvance: boolean;
+};
+
+export type RepeatMode = 'none' | 'one' | 'all';
+export type OrderMode = 'default' | 'reverse' | 'shuffle';
+
+export type PlaylistKey = number | string;
+
+export type ShuffleState = {
+  playlist: PlaylistKey[];
+  nonPlayedKeys: PlaylistKey[];
+  playedKeys: PlaylistKey[];
+  indexInPlayed: number;
+  areAllLoaded: boolean;
+};
 
 export enum ChatCreationProgress {
   Idle,
@@ -444,8 +500,9 @@ export type ProfileTabType =
   | 'similarChannels'
   | 'similarBots'
   | 'dialogs'
-  | 'gifts';
-export type SharedMediaType = 'media' | 'documents' | 'links' | 'audio' | 'voice' | 'gif';
+  | 'gifts'
+  | 'polls';
+export type SharedMediaType = 'media' | 'documents' | 'links' | 'audio' | 'voice' | 'gif' | 'polls';
 export type MiddleSearchType = 'chat' | 'myChats' | 'channels';
 export type MiddleSearchParams = {
   requestedQuery?: string;
@@ -479,6 +536,10 @@ export interface ChatMediaSearchParams {
   currentSegment: ChatMediaSearchSegment;
   segments: ChatMediaSearchSegment[];
   isLoading: boolean;
+  pendingRequest?: {
+    currentMediaMessageId: number;
+    direction?: LoadMoreDirection;
+  };
 }
 
 export enum ProfileState {
@@ -554,7 +615,7 @@ export type CustomPeerType = 'premium' | 'toBeDistributed' | 'contacts' | 'nonCo
 export type CustomPeer = {
   isCustomPeer: true;
   key?: string | number;
-  subtitleKey?: string;
+  subtitleKey?: RegularLangKey;
   avatarIcon?: IconName;
   isAvatarSquare?: boolean;
   peerColorId?: number;
@@ -565,7 +626,7 @@ export type CustomPeer = {
   withPremiumGradient?: boolean;
   isPremium?: boolean;
 } & ({
-  titleKey: string;
+  titleKey: RegularLangKey;
   title?: undefined;
 } | {
   title: string;
@@ -714,7 +775,9 @@ export interface TopicsInfo {
 
 export type TranslatedMessage = {
   isPending?: boolean;
+  requestId?: string;
   text?: ApiFormattedText;
+  richMessage?: ApiRichMessage;
   summary?: TextSummary;
 };
 
@@ -809,6 +872,7 @@ export type SendMessageParams = {
   sticker?: ApiSticker;
   story?: ApiStory | ApiStorySkipped;
   gif?: ApiVideo;
+  audio?: ApiAudio;
   poll?: ApiNewPoll;
   todo?: ApiNewMediaTodo;
   dice?: string;

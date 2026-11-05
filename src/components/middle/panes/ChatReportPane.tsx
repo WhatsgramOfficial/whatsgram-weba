@@ -1,4 +1,3 @@
-import type { FC } from '../../../lib/teact/teact';
 import { memo, useEffect, useState } from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
 
@@ -13,8 +12,8 @@ import buildClassName from '../../../util/buildClassName';
 
 import useFlag from '../../../hooks/useFlag';
 import useFrozenProps from '../../../hooks/useFrozenProps';
+import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
-import useOldLang from '../../../hooks/useOldLang';
 import useHeaderPane, { type PaneState } from '../hooks/useHeaderPane';
 
 import Button from '../../ui/Button';
@@ -38,7 +37,7 @@ type StateProps = {
   peer?: ApiPeer;
 };
 
-const ChatReportPane: FC<OwnProps & StateProps> = ({
+const ChatReportPane = ({
   chatId,
   className,
   isAutoArchived,
@@ -48,12 +47,11 @@ const ChatReportPane: FC<OwnProps & StateProps> = ({
   peer,
   currentUserId,
   onPaneStateChange,
-}) => {
+}: OwnProps & StateProps) => {
   const {
     openAddContactDialog,
     blockUser,
     reportSpam,
-    deleteChat,
     leaveChannel,
     deleteChatUser,
     deleteHistory,
@@ -61,7 +59,7 @@ const ChatReportPane: FC<OwnProps & StateProps> = ({
     hidePeerSettingsBar,
   } = getActions();
 
-  const lang = useOldLang();
+  const lang = useLang();
   const [isBlockUserModalOpen, openBlockUserModal, closeBlockUserModal] = useFlag();
   const [shouldReportSpam, setShouldReportSpam] = useState<boolean>(true);
   const [shouldDeleteChat, setShouldDeleteChat] = useState<boolean>(true);
@@ -97,7 +95,7 @@ const ChatReportPane: FC<OwnProps & StateProps> = ({
       reportSpam({ chatId: renderingChatId });
     }
     if (shouldDeleteChat) {
-      deleteChat({ chatId: renderingChatId });
+      deleteHistory({ chatId: renderingChatId, shouldDeleteForAll: false });
     }
   });
 
@@ -144,7 +142,7 @@ const ChatReportPane: FC<OwnProps & StateProps> = ({
           className="ChatReportPane--Button"
           onClick={handleAddContact}
         >
-          {lang('lng_new_contact_add')}
+          {lang('NewContactAdd')}
         </Button>
       )}
       {renderingCanBlockContact && (
@@ -156,7 +154,7 @@ const ChatReportPane: FC<OwnProps & StateProps> = ({
           className="ChatReportPane--Button"
           onClick={openBlockUserModal}
         >
-          {lang('lng_new_contact_block')}
+          {lang('NewContactBlock')}
         </Button>
       )}
       {renderingCanReportSpam && !renderingCanBlockContact && (
@@ -168,7 +166,7 @@ const ChatReportPane: FC<OwnProps & StateProps> = ({
           className="ChatReportPane--Button"
           onClick={openBlockUserModal}
         >
-          {lang('lng_report_spam_and_leave')}
+          {lang('ReportSpamAndLeave')}
         </Button>
       )}
       <Button
@@ -183,10 +181,10 @@ const ChatReportPane: FC<OwnProps & StateProps> = ({
       <ConfirmDialog
         isOpen={isBlockUserModalOpen}
         onClose={closeBlockUserModal}
-        title={lang('BlockUserTitle', user ? getUserFirstOrLastName(user) : getChatTitle(lang, chat!))}
+        title={lang('BlockUserTitle', { user: user ? getUserFirstOrLastName(lang, user) : getChatTitle(lang, chat!) })}
         text={user
-          ? lang('UserInfo.BlockConfirmationTitle', getUserFullName(user))
-          : lang('Chat.Confirm.ReportSpam.Channel')}
+          ? lang('UserInfoBlockConfirmationTitle', { user: getUserFullName(lang, user) })
+          : lang('ChatConfirmReportSpamChannel')}
         confirmIsDestructive
         confirmLabel={lang('Block')}
         confirmHandler={user ? handleConfirmBlock : handleChatReportSpam}
@@ -202,7 +200,7 @@ const ChatReportPane: FC<OwnProps & StateProps> = ({
         {user && renderingCanReportSpam && (
           <Checkbox
             className="ChatReportPane--Checkbox dialog-checkbox"
-            label={lang('ReportChat')}
+            label={lang('ReportPeerReport')}
             checked={shouldReportSpam}
             onCheck={setShouldReportSpam}
           />

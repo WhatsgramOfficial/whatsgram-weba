@@ -1,6 +1,6 @@
 import type { CallbackAction } from '../../global/types';
 import type { IconName } from '../../types/icons';
-import type { LangFnParameters, RegularLangFnParameters } from '../../util/localization';
+import type { AdvancedLangFnParameters, RegularLangFnParameters } from '../../util/localization';
 import type {
   ApiContact,
   ApiDocument,
@@ -23,8 +23,8 @@ export interface ApiInitialArgs {
   isWebmSupported?: boolean;
   maxBufferSize?: number;
   webAuthToken?: string;
+  webAuthUserId?: string;
   dcId?: number;
-  mockScenario?: string;
   shouldAllowHttpTransport?: boolean;
   shouldForceHttpTransport?: boolean;
   shouldDebugExportedSenders?: boolean;
@@ -63,6 +63,10 @@ export interface ApiAttachment {
     height: number;
     duration?: number;
   };
+  sourceDimensions?: {
+    width: number;
+    height: number;
+  };
   voice?: {
     duration: number;
     waveform: number[];
@@ -75,10 +79,12 @@ export interface ApiAttachment {
   previewBlobUrl?: string;
   previewBlob?: Blob;
 
+  isPreparing?: true;
+
   shouldSendAsFile?: true;
   shouldSendAsSpoiler?: true;
 
-  uniqueId?: string;
+  uniqueId: string;
   ttlSeconds?: number;
   isRoundVideo?: boolean;
   shouldSendInHighQuality?: boolean;
@@ -144,6 +150,11 @@ export interface ApiWebSession {
 export interface ApiSessionData {
   mainDcId: number;
   keys: Record<number, string>;
+  authKeyCreatedAt?: Record<number, number>;
+  tempAuthKey?: {
+    key: string;
+    expiresAt: number;
+  };
   isTest?: true;
 }
 
@@ -151,9 +162,9 @@ export type ApiNotification = {
   localId: string;
   containerSelector?: string;
   type?: 'paidMessage' | undefined;
-  title?: string | LangFnParameters;
+  title?: string | AdvancedLangFnParameters;
   cacheBreaker?: string;
-  actionText?: string | RegularLangFnParameters;
+  actionText?: string | AdvancedLangFnParameters;
   action?: CallbackAction | CallbackAction[];
   className?: string;
   duration?: number;
@@ -167,7 +178,7 @@ export type ApiNotification = {
   message: string;
   messageEntities?: ApiMessageEntity[];
 } | {
-  message: LangFnParameters;
+  message: AdvancedLangFnParameters;
   messageEntities?: undefined;
 });
 
@@ -187,7 +198,7 @@ export type ApiDialogContact = {
 
 export type ApiDialogLocalizedMessage = {
   type: 'localized';
-  text: LangFnParameters;
+  text: AdvancedLangFnParameters;
 };
 
 export type ApiDialog = ApiDialogError | ApiDialogMessage | ApiDialogContact | ApiDialogLocalizedMessage;
@@ -203,7 +214,7 @@ export type ApiError = {
 
 export type ApiFieldError = {
   field: string;
-  message: string;
+  messageKey: RegularLangFnParameters;
 };
 
 export type ApiExportedInvite = {
@@ -332,13 +343,18 @@ export interface ApiAppConfig {
   starsSuggestedPostFutureMin: number;
   noForwardsRequestExpirePeriod: number;
   tonSuggestedPostCommissionPermille: number;
-  tonSuggestedPostAmountMax: number;
-  tonSuggestedPostAmountMin: number;
-  tonStargiftResaleAmountMax?: number;
-  tonStargiftResaleAmountMin?: number;
+  tonSuggestedPostAmountMax: bigint;
+  tonSuggestedPostAmountMin: bigint;
+  tonStargiftResaleAmountMax?: bigint;
+  tonStargiftResaleAmountMin?: bigint;
   tonStargiftResaleCommissionPermille?: number;
   tonUsdRate?: number;
   tonTopupUrl: string;
+  isWalletAvailable?: boolean;
+  // Transfers below this are hidden from the wallet history
+  walletTransferMinNanos?: bigint;
+  walletGaslessDailyTransfers?: number;
+  oldWalletBotUsername?: string;
   pollMaxAnswers: number;
   pollClosePeriodMax: number;
   pollCountriesMax: number;
@@ -349,6 +365,7 @@ export interface ApiAppConfig {
   ignoreRestrictionReasons?: string[];
   needAgeVideoVerification?: boolean;
   verifyAgeBotUsername?: string;
+  musicSearchUsername?: string;
   verifyAgeCountry?: string;
   verifyAgeMin?: number;
   typingDraftTtl: number;
@@ -365,6 +382,7 @@ export interface ApiAppConfig {
   aiComposeToneExamplesNum?: number;
   aiComposeToneTitleLengthMax?: number;
   aiComposeTonePromptLengthMax?: number;
+  botAllowedSuffixes?: string[];
 }
 
 export interface ApiConfig {
@@ -444,6 +462,13 @@ export type ApiUrlAuthResultRequest = {
   matchCodesFirst?: boolean;
   userIdHint?: string;
   verifiedAppName?: string;
+  walletRequest?: ApiUrlAuthWalletRequest;
+};
+
+export type ApiUrlAuthWalletRequest = {
+  sessionId: string;
+  // The dApp key the connection event is encrypted to
+  clientId: string;
 };
 
 type ApiUrlAuthResultAccepted = {
@@ -468,7 +493,7 @@ export type ApiUrlAuthResult =
 export interface ApiCollectibleInfo {
   amount: number;
   currency: string;
-  cryptoAmount: number;
+  cryptoAmount: bigint;
   cryptoCurrency: string;
   purchaseDate: number;
   url: string;
@@ -492,17 +517,18 @@ export type ApiLimitType =
   | 'savedDialogsPinned'
   | 'maxReactions'
   | 'moreAccounts'
-  | 'aiComposeToneSaved';
+  | 'aiComposeToneSaved'
+  | 'botsCreate';
 
 export type ApiLimitTypeWithModal = Exclude<ApiLimitType, (
   'messageLength' | 'captionLength' | 'aboutLength' | 'stickersFaved' | 'savedGifs' | 'recommendedChannels'
   | 'moreAccounts'
-  | 'maxReactions' | 'aiComposeToneSaved'
+  | 'maxReactions' | 'aiComposeToneSaved' | 'botsCreate'
 )>;
 
 export type ApiLimitTypeForPromo = Exclude<ApiLimitType,
   'uploadMaxFileparts' | 'messageLength' | 'chatlistInvites' | 'chatlistJoined' | 'savedDialogsPinned'
-  | 'maxReactions' | 'aiComposeToneSaved'
+  | 'maxReactions' | 'aiComposeToneSaved' | 'botsCreate'
 >;
 
 export type ApiPeerNotifySettings = {
@@ -527,3 +553,9 @@ export interface ApiPasskey {
   softwareEmojiId?: string;
   lastUsageDate?: number;
 }
+
+export type ApiEmojiGroup = {
+  title: string;
+  iconEmojiId: string;
+  emoticons: string[];
+};

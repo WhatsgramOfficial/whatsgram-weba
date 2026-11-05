@@ -85,7 +85,11 @@ export class SecurityError extends Error {
   }
 }
 
-export class MessageReplayError extends SecurityError {}
+export class PermAuthKeyInvalidError extends Error {
+  constructor() {
+    super('The permanent auth key is invalid');
+  }
+}
 
 /**
  * Occurs when there's a hash mismatch between the decrypted CDN file

@@ -3,6 +3,7 @@ import { getActions, withGlobal } from '../../global';
 
 import type { MessageListType, ThreadId, ThreadReadState } from '../../types';
 import type { IconName } from '../../types/icons';
+import type { RegularLangKey } from '../../types/language';
 
 import { selectChat, selectCurrentMessageList, selectCurrentMiddleSearch } from '../../global/selectors';
 import { selectThreadReadState } from '../../global/selectors/threads';
@@ -16,6 +17,7 @@ import styles from './FloatingActionButtons.module.scss';
 
 type OwnProps = {
   withScrollDown: boolean;
+  isHidden?: boolean;
 };
 
 type StateProps = {
@@ -28,7 +30,7 @@ type StateProps = {
 
 type UnreadCountButton = {
   icon: IconName;
-  ariaLabelLang: string;
+  ariaLabelLang: RegularLangKey;
   unreadCount?: number;
   isHidden: boolean;
   hiddenUnreadCountButtonsBelow: number;
@@ -38,6 +40,7 @@ type UnreadCountButton = {
 
 const FloatingActionButtons = ({
   withScrollDown,
+  isHidden,
   messageListType,
   chatId,
   threadId,
@@ -186,12 +189,12 @@ const FloatingActionButtons = ({
 
   const fabClassName = buildClassName(
     styles.root,
-    (withScrollDown || hasUnreadCountButtons) && styles.revealed,
-    hasUnreadCountButtons && !withScrollDown && styles.hideScrollDown,
+    !isHidden && (withScrollDown || hasUnreadCountButtons) && styles.revealed,
+    !isHidden && hasUnreadCountButtons && !withScrollDown && styles.hideScrollDown,
   );
 
   return (
-    <div ref={elementRef} className={fabClassName}>
+    <div ref={elementRef} className={fabClassName} inert={isHidden}>
       {unreadCountButtons.map((button) => (
         <ScrollDownButton
           key={button.icon}

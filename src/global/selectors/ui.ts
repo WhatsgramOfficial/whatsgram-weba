@@ -5,6 +5,7 @@ import { NewChatMembersProgress, RightColumnContent } from '../../types';
 
 import { IS_SNAP_EFFECT_SUPPORTED } from '../../util/browser/windowEnvironment';
 import { getCurrentTabId } from '../../util/establishMultitabRole';
+import memoized from '../../util/memoized';
 import { getActionMessageBg } from '../../util/wallpaper';
 import { selectTabBrowserState } from '../helpers/browser';
 import { getMessageVideo, getWebPageVideo } from '../helpers/messageMedia';
@@ -13,6 +14,8 @@ import { selectWebPageFromMessage } from './messages';
 import { selectSharedSettings } from './sharedState';
 import { selectIsStatisticsShown } from './statistics';
 import { selectTabState } from './tabs';
+
+const getActionMessageBgMemo = memoized(getActionMessageBg);
 
 export function selectIsMediaViewerOpen<T extends GlobalState>(
   global: T,
@@ -56,10 +59,6 @@ export function selectRightColumnContentKey<T extends GlobalState>(
     RightColumnContent.BoostStatistics
   ) : tabState.monetizationStatistics ? (
     RightColumnContent.MonetizationStatistics
-  ) : tabState.stickerSearch.query !== undefined ? (
-    RightColumnContent.StickerSearch
-  ) : tabState.gifSearch.query !== undefined ? (
-    RightColumnContent.GifSearch
   ) : tabState.newChatMembersProgress !== NewChatMembersProgress.Closed ? (
     RightColumnContent.AddingMembers
   ) : tabState.chatInfo.isOpen && tabState.messageLists.length ? (
@@ -85,7 +84,7 @@ export function selectThemeValues<T extends GlobalState>(global: T, themeKey: Th
 
 export function selectActionMessageBg<T extends GlobalState>(global: T) {
   const theme = selectTheme(global);
-  return getActionMessageBg(theme, selectThemeValues(global, theme));
+  return getActionMessageBgMemo(theme, selectThemeValues(global, theme));
 }
 
 export function selectIsForumPanelOpen<T extends GlobalState>(
@@ -112,6 +111,20 @@ export function selectIsReactionPickerOpen<T extends GlobalState>(
 ) {
   const { reactionPicker } = selectTabState(global, tabId);
   return Boolean(reactionPicker?.position);
+}
+
+export function selectCommunityPanelId<T extends GlobalState>(
+  global: T,
+  ...[tabId = getCurrentTabId()]: TabArgs<T>
+) {
+  return selectTabState(global, tabId).communityPanelId;
+}
+
+export function selectIsChatListPanelOpen<T extends GlobalState>(
+  global: T,
+  ...[tabId = getCurrentTabId()]: TabArgs<T>
+) {
+  return selectIsForumPanelOpen(global, tabId) || Boolean(selectCommunityPanelId(global, tabId));
 }
 
 export function selectPerformanceSettings<T extends GlobalState>(global: T) {

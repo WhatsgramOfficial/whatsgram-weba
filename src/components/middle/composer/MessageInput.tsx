@@ -1,4 +1,4 @@
-import { TextSelection } from '@tiptap/pm/state';
+import { findChildren } from '@tiptap/core';
 import type { ElementRef, TeactNode } from '../../../lib/teact/teact';
 import {
   memo, useEffect, useLayoutEffect, useMemo,
@@ -6,14 +6,16 @@ import {
 } from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
 
-import type { ApiFormattedText, ApiInputMessageReplyInfo, ApiInputRichMessage } from '../../../api/types';
+import type { ApiFormattedText, ApiInputDraftReplyInfo, ApiInputRichMessage } from '../../../api/types';
 import type { SharedSettings } from '../../../global/types';
 import type {
   MessageListType, ThreadId,
 } from '../../../types';
 import type { RichEditorDateClickTarget } from '../../../util/tiptap/extensions/date';
 import type { RichEditorTooltipsConfig } from '../../common/tooltips/types';
-import type { RichEditor } from './richEditorTypes';
+import type {
+  RichEditor, RichEditorMediaEditHandler, RichEditorMediaFilesHandler,
+} from './richEditorTypes';
 
 import { DEBUG, EDITABLE_INPUT_ID, EDITABLE_INPUT_MODAL_ID } from '../../../config';
 import { requestForcedReflow, requestMutation } from '../../../lib/fasterdom/fasterdom';
@@ -29,8 +31,8 @@ import buildClassName from '../../../util/buildClassName';
 import captureKeyboardListeners, { hasActiveHandler } from '../../../util/captureKeyboardListeners';
 import { getIsDirectTextInputDisabled } from '../../../util/directInputManager';
 import focusEditableElement from '../../../util/focusEditableElement';
-import { subscribeToCodeLanguageLoad } from '../../../util/highlightCode';
-import { debounce, fastRaf } from '../../../util/schedulers';
+import { CODE_HIGHLIGHTING_CHANGED_META, subscribeToCodeLanguageLoad } from '../../../util/highlightCode';
+import { debounce, fastRaf, throttleWith } from '../../../util/schedulers';
 import { getUtf8Length } from '../../../util/textFormat';
 import tiptapStyles from '../../../util/tiptap/styling.module.scss';
 import renderText from '../../common/helpers/renderText';
@@ -45,7 +47,6 @@ import useAppLayout from '../../../hooks/useAppLayout';
 import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
-import useOldLang from '../../../hooks/useOldLang';
 import useScrollableHint from '../../../hooks/useScrollableHint';
 import { useStateRef } from '../../../hooks/useStateRef';
 
@@ -88,7 +89,10 @@ export type OwnProps = {
   maxLength?: number;
   onRichInputCollapse?: NoneToVoidFunction;
   onRichInputExpand?: NoneToVoidFunction;
+  onOpenAiEditor?: NoneToVoidFunction;
   onSuppressedFocus?: () => void;
+  onMediaEdit?: RichEditorMediaEditHandler;
+  onMediaFiles?: RichEditorMediaFilesHandler;
   onSend: () => void;
   onScroll?: (event: React.UIEvent<HTMLElement>) => void;
   onFocus?: NoneToVoidFunction;
@@ -96,7 +100,7 @@ export type OwnProps = {
 };
 
 type StateProps = {
-  replyInfo?: ApiInputMessageReplyInfo;
+  replyInfo?: ApiInputDraftReplyInfo;
   isSelectModeActive?: boolean;
   messageSendKeyCombo?: SharedSettings['messageSendKeyCombo'];
 };
@@ -136,7 +140,10 @@ const MessageInput = ({
   messageListType,
   onRichInputCollapse,
   onRichInputExpand,
+  onOpenAiEditor,
   onSuppressedFocus,
+  onMediaEdit,
+  onMediaFiles,
   onSend,
   onScroll,
   onFocus,
@@ -161,7 +168,6 @@ const MessageInput = ({
   const scrollerRef = useRef<HTMLDivElement>();
   const updateRafRef = useRef<number>();
 
-  const oldLang = useOldLang();
   const lang = useLang();
   const onBlurRef = useStateRef(onBlur);
   const onFocusRef = useStateRef(onFocus);
@@ -292,20 +298,21 @@ const MessageInput = ({
           heightLimit = baseHeight + lineHeight * (COLLAPSED_RICH_PREVIEW_LINE_COUNT - 1);
         }
         const newHeight = Math.min(scrollHeight, heightLimit);
-
-        if (newHeight === currentHeight) {
-          return undefined;
-        }
-
         const isOverflown = scrollHeight > heightLimit;
+        const isHeightChanged = newHeight !== currentHeight;
 
         function exec() {
+          currentScroller.classList.toggle('overflown', isOverflown);
+
+          if (!isHeightChanged) {
+            return;
+          }
+
           const transitionDuration = Math.round(
             TRANSITION_DURATION_FACTOR * Math.log(Math.abs(newHeight - currentHeight)),
           );
           currentScroller.style.height = `${newHeight}px`;
           currentScroller.style.transitionDuration = `${transitionDuration}ms`;
-          currentScroller.classList.toggle('overflown', isOverflown);
         }
 
         if (willSend) {
@@ -362,6 +369,12 @@ const MessageInput = ({
   });
 
   const getIsRichInputExpanded = useLastCallback(() => Boolean(isMainInput && isRichInputExpanded));
+  const handleMediaEdit = useLastCallback<RichEditorMediaEditHandler>((uploadId) => {
+    onMediaEdit?.(uploadId);
+  });
+  const handleMediaFiles = useLastCallback<RichEditorMediaFilesHandler>((files, position, shouldAppend) => {
+    onMediaFiles?.(files, position, shouldAppend);
+  });
 
   const syncEditorElementAttributes = useLastCallback((input: HTMLElement) => {
     input.id = editableInputId || EDITABLE_INPUT_ID;
@@ -371,6 +384,7 @@ const MessageInput = ({
     input.setAttribute('dir', 'auto');
     input.setAttribute('tabindex', isCollapsedRichOnlyPreview ? '-1' : '0');
     input.setAttribute('contenteditable', isRichEditorEditable ? 'true' : 'false');
+    input.toggleAttribute('data-dropzone', Boolean(isMainInput && isRichInputExpanded));
     if (isCollapsedRichOnlyPreview) {
       input.setAttribute('aria-readonly', 'true');
     } else {
@@ -422,16 +436,13 @@ const MessageInput = ({
       element: input,
       sharedCanvasRef,
       sharedCanvasHqRef,
-      blockPlaceholder: lang('RichEditorBlockPlaceholder'),
-      pullquotePlaceholder: lang('RichEditorPullquotePlaceholder'),
-      quoteCaptionPlaceholder: lang('RichEditorQuoteCaptionPlaceholder'),
-      tableTitlePlaceholder: lang('InputTitle'),
-      unsupportedPlaceholder: lang('PageContentUnsupported'),
       tooltips: rootTooltips,
       getIsRichInputExpanded,
       onReady: handleEditorReady,
       onUpdate: handleEditorUpdate,
       onDateClick: handleDateClick,
+      onMediaEdit: handleMediaEdit,
+      onMediaFiles: handleMediaFiles,
     });
 
     return () => {
@@ -440,9 +451,12 @@ const MessageInput = ({
       }
       unregisterRichEditorRoot();
     };
-  }, [canRenderRichEditor, getIsRichInputExpanded, handleDateClick, handleEditorReady, handleEditorUpdate,
-    isActive, lang, registerRichEditorRoot, richValueRef, rootTooltips,
-    syncCloneWithSource, syncEditorElementAttributes, updateInputHeight]);
+  }, [
+    canRenderRichEditor, getIsRichInputExpanded, handleDateClick, handleEditorReady,
+    handleEditorUpdate, handleMediaEdit, handleMediaFiles,
+    isActive, registerRichEditorRoot, richValueRef, rootTooltips,
+    syncCloneWithSource, syncEditorElementAttributes, updateInputHeight,
+  ]);
 
   useLayoutEffect(() => {
     if (!editor || editor.isDestroyed || !isMainInput || !isActive) {
@@ -458,43 +472,23 @@ const MessageInput = ({
     syncEditorElementAttributes]);
 
   const refreshCodeBlockHighlighting = useLastCallback(() => {
-    requestMutation(() => {
-      if (!editor || editor.isDestroyed) {
-        return;
-      }
+    if (!editor || editor.isDestroyed) {
+      return;
+    }
 
-      const transaction = editor.state.tr
-        .setMeta('addToHistory', false)
-        .setMeta('preventUpdate', true);
-      const { from, to } = editor.state.selection;
+    if (!findChildren(editor.state.doc, (node) => node.type.name === 'codeBlock').length) {
+      return;
+    }
 
-      editor.state.doc.descendants((node, position) => {
-        if (node.type.name !== 'codeBlock') {
-          return true;
-        }
-
-        transaction.replaceWith(position, position + node.nodeSize, node);
-        return false;
-      });
-
-      if (!transaction.docChanged) {
-        return;
-      }
-
-      const docSize = transaction.doc.content.size;
-      transaction.setSelection(TextSelection.create(
-        transaction.doc,
-        Math.min(from, docSize),
-        Math.min(to, docSize),
-      ));
-      editor.view.dispatch(transaction);
-      syncCloneWithSource(editor.view.dom);
-      updateInputHeight();
-    });
+    editor.view.dispatch(editor.state.tr
+      .setMeta(CODE_HIGHLIGHTING_CHANGED_META, true)
+      .setMeta('addToHistory', false));
+    syncCloneWithSource(editor.view.dom);
+    updateInputHeight();
   });
 
   useEffect(() => {
-    return subscribeToCodeLanguageLoad(refreshCodeBlockHighlighting);
+    return subscribeToCodeLanguageLoad(throttleWith(requestMutation, refreshCodeBlockHighlighting));
   }, [refreshCodeBlockHighlighting]);
 
   useLayoutEffect(() => {
@@ -843,11 +837,11 @@ const MessageInput = ({
                 )}
                 dir="auto"
               >
-                {isMainInputLocked && <Icon name="lock-badge" className="placeholder-icon" />}
+                {isMainInputLocked && <Icon name="lock-filled" className="placeholder-icon" />}
                 {placeholder}
                 {isStoryInput && isNeedPremium && (
                   <Button className="unlock-button" size="tiny" color="adaptive" onClick={handleOpenPremiumModal}>
-                    {oldLang('StoryRepliesLockedButton')}
+                    {lang('StoryRepliesLockedButton')}
                   </Button>
                 )}
               </span>
@@ -876,7 +870,7 @@ const MessageInput = ({
         </div>
       )}
       {isMainInput && canRenderRichEditor && (
-        <RichEditorToolbar editor={editor} isEnabled={isRichInputExpanded} />
+        <RichEditorToolbar editor={editor} isEnabled={isRichInputExpanded} onOpenAiEditor={onOpenAiEditor} />
       )}
       {dateEditTarget?.type === 'date' && (
         <CalendarModal

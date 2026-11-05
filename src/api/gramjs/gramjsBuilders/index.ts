@@ -2,6 +2,7 @@ import { Api as GramJs } from '../../../lib/gramjs';
 import { generateRandomBigInt, generateRandomBytes, readBigIntFromBuffer } from '../../../lib/gramjs/Helpers';
 
 import type {
+  ApiAudio,
   ApiBirthday,
   ApiBotApp,
   ApiChatAdminRights,
@@ -24,7 +25,6 @@ import type {
   ApiNewMediaTodo,
   ApiNewPoll,
   ApiPhoneCall,
-  ApiPhoto,
   ApiPremiumGiftCodeOption,
   ApiPrivacyKey,
   ApiProfileTab,
@@ -47,11 +47,13 @@ import {
 
 import { CHANNEL_ID_BASE, DEFAULT_STATUS_ICON_ID, STARS_CURRENCY_CODE } from '../../../config';
 import { writeUint32LE } from '../../../util/encoding/buffer';
-import { pick } from '../../../util/iteratees';
+import { getMtpEphemeralMessageId } from '../../../util/keys/messageKey';
 import { deserializeBytes } from '../helpers/misc';
 import localDb from '../localDb';
+import { buildInputDocument, buildInputPhoto } from './media';
 
 export { buildInputRichMessage } from './richContent';
+export { buildInputDocument, buildInputPhoto } from './media';
 
 export const DEFAULT_PRIMITIVES = {
   INT: 0,
@@ -168,6 +170,15 @@ export function buildInputPeerFromLocalDb(chatOrUserId: string): GramJs.TypeInpu
   return buildInputPeer(chatOrUserId, String(accessHash));
 }
 
+export function buildInputUserFromLocalDb(userId: string): GramJs.TypeInputUser | undefined {
+  const accessHash = localDb.users[userId]?.accessHash;
+  if (!accessHash) {
+    return undefined;
+  }
+
+  return buildInputUser(userId, String(accessHash));
+}
+
 export function buildInputChannelFromLocalDb(channelId: string): GramJs.TypeInputChannel | undefined {
   const channel = localDb.chats[channelId];
 
@@ -191,25 +202,7 @@ export function buildInputStickerSetShortName(shortName: string) {
   });
 }
 
-export function buildInputDocument(media: ApiSticker | ApiVideo | ApiDocument) {
-  if (!media.id) {
-    return undefined;
-  }
-
-  const document = localDb.documents[media.id];
-
-  if (!document) {
-    return undefined;
-  }
-
-  return new GramJs.InputDocument(pick(document, [
-    'id',
-    'accessHash',
-    'fileReference',
-  ]));
-}
-
-export function buildInputMediaDocument(media: ApiSticker | ApiVideo | ApiDocument, spoiler?: true) {
+export function buildInputMediaDocument(media: ApiAudio | ApiSticker | ApiVideo | ApiDocument, spoiler?: true) {
   const inputDocument = buildInputDocument(media);
 
   if (!inputDocument) {
@@ -328,6 +321,10 @@ function buildInputMediaFromContent(content?: MediaContent) {
 
   if (content.sticker) {
     return buildInputMediaDocument(content.sticker);
+  }
+
+  if (content.audio) {
+    return buildInputMediaDocument(content.audio);
   }
 
   return undefined;
@@ -558,20 +555,6 @@ export function buildChatPhotoForLocalDb(photo: GramJs.TypePhoto) {
   });
 }
 
-export function buildInputPhoto(photo: ApiPhoto) {
-  const localPhoto = localDb.photos[photo?.id];
-
-  if (!localPhoto) {
-    return undefined;
-  }
-
-  return new GramJs.InputPhoto(pick(localPhoto, [
-    'id',
-    'accessHash',
-    'fileReference',
-  ]));
-}
-
 export function buildInputBirthday(birthday: ApiBirthday) {
   return new GramJs.Birthday({
     day: birthday.day,
@@ -663,6 +646,9 @@ export function buildInputPrivacyKey(privacyKey: ApiPrivacyKey) {
 
     case 'noPaidMessages':
       return new GramJs.InputPrivacyKeyNoPaidMessages();
+
+    case 'savedMusic':
+      return new GramJs.InputPrivacyKeySavedMusic();
   }
 
   return undefined;
@@ -696,6 +682,8 @@ export function buildInputReportReason(reason: ApiReportReason): GramJs.TypeRepo
 
 export function buildSendMessageAction(action: ApiSendMessageAction) {
   switch (action.type) {
+    case 'stopDraft':
+      return new GramJs.SendMessageStopDraftAction({ randomId: BigInt(action.randomId) });
     case 'cancel':
       return new GramJs.SendMessageCancelAction();
     case 'typing':
@@ -854,6 +842,8 @@ export function buildInputInvoice(invoice: ApiRequestInputInvoice) {
         toId: buildInputPeer(peer.id, peer.accessHash),
         slug,
         ton: invoice.currency === 'TON' || undefined,
+        showName: invoice.shouldShowName,
+        message: invoice.message && buildInputTextWithEntities(invoice.message),
       });
     }
 
@@ -1014,6 +1004,8 @@ export function buildInputAiComposeTone(tone: ApiInputAiComposeTone): GramJs.Typ
       return new GramJs.InputAiComposeToneID({ id: BigInt(tone.id), accessHash: BigInt(tone.accessHash) });
     case 'slug':
       return new GramJs.InputAiComposeToneSlug({ slug: tone.slug });
+    case 'singleUse':
+      return new GramJs.InputAiComposeToneSingleUse({ customPrompt: tone.customPrompt });
   }
 }
 
@@ -1036,6 +1028,12 @@ export function buildInputReplyTo(replyInfo: ApiInputReplyInfo) {
     return new GramJs.InputReplyToStory({
       peer: buildInputPeerFromLocalDb(replyInfo.peerId)!,
       storyId: replyInfo.storyId,
+    });
+  }
+
+  if (replyInfo.type === 'ephemeral') {
+    return new GramJs.InputReplyToEphemeralMessage({
+      id: getMtpEphemeralMessageId(replyInfo.replyToMsgId),
     });
   }
 
@@ -1066,7 +1064,7 @@ export function buildInputStarsAmount(amount: ApiTypeCurrencyAmount): GramJs.Typ
   }
 
   return new GramJs.StarsTonAmount({
-    amount: BigInt(amount.amount),
+    amount: amount.amount,
   });
 }
 

@@ -1,4 +1,3 @@
-import type { FC } from '../../../lib/teact/teact';
 import {
   memo,
   useEffect,
@@ -70,7 +69,7 @@ type StateProps = {
   chatMembers?: ApiChatMember[];
 };
 
-const SenderGroupContainer: FC<OwnProps & StateProps> = ({
+const SenderGroupContainer = ({
   message,
   withAvatar,
   children,
@@ -87,7 +86,7 @@ const SenderGroupContainer: FC<OwnProps & StateProps> = ({
   canRemoveSender,
   kickedMembers,
   chatMembers,
-}) => {
+}: OwnProps & StateProps) => {
   const {
     openChat, updateInsertingPeerIdMention, openMiddleSearch, openDeleteMemberModal,
   } = getActions();
@@ -208,7 +207,7 @@ const SenderGroupContainer: FC<OwnProps & StateProps> = ({
         <>
           {isAvatarPeerUser && (
             <MenuItem
-              icon="comments"
+              icon="message"
               onClick={handleOpenChat}
             >
               {lang('SendMessage')}
@@ -297,7 +296,7 @@ export default memo(withGlobal<OwnProps>(
     const fullInfo = selectChatFullInfo(global, chatId);
     const canBanUsers = selectCanBanUsers(global, chatId);
     const isSenderAdmin = Boolean(sender && fullInfo?.adminMembersById?.[sender.id]);
-    const canBanTarget = chat?.isCreator || (Boolean(fullInfo?.adminMembersById) && !isSenderAdmin);
+    const canBanTarget = chat?.isOwner || (Boolean(fullInfo?.adminMembersById) && !isSenderAdmin);
     const isSenderRemovable = Boolean(sender && sender.id !== chatId
       && sender.id !== fullInfo?.linkedChatId && sender.id !== chat?.linkedMonoforumId);
     const canRemoveSender = Boolean(sender && sender.id !== global.currentUserId &&

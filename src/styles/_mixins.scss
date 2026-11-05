@@ -13,6 +13,13 @@
   margin-inline-end: calc(max($margin - var(--scrollbar-width), $forceSpace));
 }
 
+// The inline-end side gives up whatever width the scrollbar takes
+@mixin scrollable-padding($top, $side: 1rem, $bottom: $side) {
+  padding: $top $side $bottom;
+
+  @include adapt-padding-to-scrollbar($side);
+}
+
 @mixin filter-outline($width: 0.125rem, $color) {
   filter:
     drop-shadow($width $width 0 $color)
@@ -177,24 +184,6 @@
 @mixin with-vt-type($type) {
   :global(.active-vt-#{$type}) & {
     view-transition-name: var(--_vtn);
-  }
-}
-
-@mixin action-message-bg($isModule: false, $noBackground: false) {
-  @if not $noBackground {
-    background-color: var(--action-message-bg);
-  }
-
-  @if $isModule {
-    :global(body.with-message-blur) & {
-      backdrop-filter: blur(4px);
-    }
-  }
-
-  @else {
-    body.with-message-blur & {
-      backdrop-filter: blur(4px);
-    }
   }
 }
 

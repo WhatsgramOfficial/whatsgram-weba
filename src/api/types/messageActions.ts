@@ -42,6 +42,11 @@ export interface ApiMessageActionChatJoinedByLink extends ActionMediaType {
   inviterId: string;
 }
 
+export interface ApiMessageActionChatJoinedViaCommunity extends ActionMediaType {
+  type: 'chatJoinedViaCommunity';
+  communityId: string;
+}
+
 export interface ApiMessageActionChannelCreate extends ActionMediaType {
   type: 'channelCreate';
   title: string;
@@ -58,12 +63,23 @@ export interface ApiMessageActionChannelMigrateFrom extends ActionMediaType {
   chatId: string;
 }
 
+export interface ApiMessageActionChangeCommunity extends ActionMediaType {
+  type: 'changeCommunity';
+  communityId?: string;
+}
+
 export interface ApiMessageActionPinMessage extends ActionMediaType {
   type: 'pinMessage';
 }
 
 export interface ApiMessageActionHistoryClear extends ActionMediaType {
   type: 'historyClear';
+}
+
+export interface ApiMessageActionSetMessagesTtl extends ActionMediaType {
+  type: 'setMessagesTtl';
+  period: number;
+  autoSettingFromId?: string;
 }
 
 export interface ApiMessageActionGameScore extends ActionMediaType {
@@ -107,6 +123,16 @@ export interface ApiMessageActionBotAllowed extends ActionMediaType {
   app?: ApiBotApp;
 }
 
+export interface ApiMessageActionRequestedPeer extends ActionMediaType {
+  type: 'requestedPeer';
+  peerIds: string[];
+}
+
+export interface ApiMessageActionManagedBotCreated extends ActionMediaType {
+  type: 'managedBotCreated';
+  botId: string;
+}
+
 export interface ApiMessageActionContactSignUp extends ActionMediaType {
   type: 'contactSignUp';
 }
@@ -144,7 +170,7 @@ export interface ApiMessageActionGiftPremium extends ActionMediaType {
   amount: number;
   days: number;
   cryptoCurrency?: string;
-  cryptoAmount?: number;
+  cryptoAmount?: bigint;
   message?: ApiFormattedText;
 }
 
@@ -183,7 +209,7 @@ export interface ApiMessageActionGiftCode extends ActionMediaType {
   currency?: string;
   amount?: number;
   cryptoCurrency?: string;
-  cryptoAmount?: number;
+  cryptoAmount?: bigint;
   message?: ApiFormattedText;
 }
 
@@ -217,7 +243,7 @@ export interface ApiMessageActionGiftStars extends ActionMediaType {
   amount: number;
   stars: number;
   cryptoCurrency?: string;
-  cryptoAmount?: number;
+  cryptoAmount?: bigint;
   transactionId?: string;
 }
 
@@ -226,8 +252,31 @@ export interface ApiMessageActionGiftTon extends ActionMediaType {
   currency: string;
   amount: number;
   cryptoCurrency: string;
-  cryptoAmount: number;
+  cryptoAmount: bigint;
   transactionId?: string;
+}
+
+export interface ApiMessageActionWalletTonConnectRequest extends ActionMediaType {
+  type: 'walletTonConnectRequest';
+  sessionId: string;
+  expires: number;
+  topic?: string;
+  traceId?: string;
+  dappName?: string;
+  isAccepted?: boolean;
+  isDeclined?: boolean;
+}
+
+// The service account reports transfers from senders the server cannot name, e.g. outside wallets
+export interface ApiMessageActionGramTransfer extends ActionMediaType {
+  type: 'gramTransfer';
+  // Nanotons, always positive
+  amount: bigint;
+  peerAddress: string;
+  transactionId: string;
+  comment?: string;
+  // Base64, decrypted on the client
+  encryptedComment?: string;
 }
 
 export interface ApiMessageActionPrizeStars extends ActionMediaType {
@@ -265,6 +314,8 @@ export interface ApiMessageActionStarGift extends ActionMediaType {
 
 export interface ApiMessageActionStarGiftUnique extends ActionMediaType {
   type: 'starGiftUnique';
+  isNameHidden?: true;
+  message?: ApiFormattedText;
   isUpgrade?: true;
   isTransferred?: true;
   isSaved?: true;
@@ -393,11 +444,14 @@ export type ApiMessageAction = ApiMessageActionUnsupported | ApiMessageActionCha
   | ApiMessageActionChatEditPhoto | ApiMessageActionChatDeletePhoto | ApiMessageActionChatAddUser
   | ApiMessageActionChatDeleteUser | ApiMessageActionChatJoinedByLink | ApiMessageActionChannelCreate
   | ApiMessageActionChatMigrateTo | ApiMessageActionChannelMigrateFrom | ApiMessageActionPinMessage
-  | ApiMessageActionHistoryClear | ApiMessageActionGameScore | ApiMessageActionPaymentSent | ApiMessageActionPhoneCall
+  | ApiMessageActionHistoryClear | ApiMessageActionSetMessagesTtl
+  | ApiMessageActionGameScore | ApiMessageActionPaymentSent | ApiMessageActionPhoneCall
   | ApiMessageActionScreenshotTaken | ApiMessageActionCustomAction | ApiMessageActionBotAllowed
   | ApiMessageActionBoostApply | ApiMessageActionContactSignUp | ApiMessageActionExpiredContent
+  | ApiMessageActionRequestedPeer | ApiMessageActionManagedBotCreated
   | ApiMessageActionGroupCall | ApiMessageActionInviteToGroupCall | ApiMessageActionGroupCallScheduled
-  | ApiMessageActionChatJoinedByRequest | ApiMessageActionWebViewDataSent | ApiMessageActionGiftPremium
+  | ApiMessageActionChatJoinedByRequest | ApiMessageActionChatJoinedViaCommunity
+  | ApiMessageActionWebViewDataSent | ApiMessageActionGiftPremium
   | ApiMessageActionTopicCreate | ApiMessageActionTopicEdit | ApiMessageActionSuggestProfilePhoto
   | ApiMessageActionSuggestBirthday
   | ApiMessageActionChannelJoined | ApiMessageActionGiftCode | ApiMessageActionGiveawayLaunch
@@ -408,4 +462,5 @@ export type ApiMessageAction = ApiMessageActionUnsupported | ApiMessageActionCha
   | ApiMessageActionTodoAppendTasks | ApiMessageActionPollAppendAnswer | ApiMessageActionPollDeleteAnswer
   | ApiMessageActionStarGiftPurchaseOffer
   | ApiMessageActionStarGiftPurchaseOfferDeclined | ApiMessageActionNewCreatorPending
-  | ApiMessageActionChangeCreator | ApiMessageActionNoForwardsToggle | ApiMessageActionNoForwardsRequest;
+  | ApiMessageActionChangeCreator | ApiMessageActionNoForwardsToggle | ApiMessageActionNoForwardsRequest
+  | ApiMessageActionChangeCommunity | ApiMessageActionGramTransfer | ApiMessageActionWalletTonConnectRequest;

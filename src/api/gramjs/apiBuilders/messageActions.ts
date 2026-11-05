@@ -3,7 +3,7 @@ import { Api as GramJs } from '../../../lib/gramjs';
 import type { ApiPhoneCallDiscardReason } from '../../types';
 import type { ApiMessageAction } from '../../types/messageActions';
 
-import { toJSNumber } from '../../../util/numbers';
+import { getBigIntAbs, toJSNumber } from '../../../util/numbers';
 import { buildApiBotApp } from './bots';
 import { buildApiFormattedText, buildApiPhoto } from './common';
 import { buildApiStarGift } from './gifts';
@@ -66,6 +66,13 @@ export function buildApiMessageAction(action: GramJs.TypeMessageAction): ApiMess
       userId: buildApiPeerId(userId, 'user'),
     };
   }
+  if (action instanceof GramJs.MessageActionChatJoinedViaCommunity) {
+    return {
+      mediaType: 'action',
+      type: 'chatJoinedViaCommunity',
+      communityId: buildApiPeerId(action.communityId, 'channel'),
+    };
+  }
   if (action instanceof GramJs.MessageActionChatJoinedByLink) {
     const { inviterId } = action;
     return {
@@ -99,6 +106,14 @@ export function buildApiMessageAction(action: GramJs.TypeMessageAction): ApiMess
       chatId: buildApiPeerId(chatId, 'chat'),
     };
   }
+  if (action instanceof GramJs.MessageActionChangeCommunity) {
+    const { communityId } = action;
+    return {
+      mediaType: 'action',
+      type: 'changeCommunity',
+      communityId: communityId !== undefined ? buildApiPeerId(communityId, 'channel') : undefined,
+    };
+  }
   if (action instanceof GramJs.MessageActionPinMessage) {
     return {
       mediaType: 'action',
@@ -109,6 +124,16 @@ export function buildApiMessageAction(action: GramJs.TypeMessageAction): ApiMess
     return {
       mediaType: 'action',
       type: 'historyClear',
+    };
+  }
+  if (action instanceof GramJs.MessageActionSetMessagesTTL) {
+    const { period, autoSettingFrom } = action;
+
+    return {
+      mediaType: 'action',
+      type: 'setMessagesTtl',
+      period,
+      autoSettingFromId: autoSettingFrom?.toString(),
     };
   }
   if (action instanceof GramJs.MessageActionGameScore) {
@@ -173,6 +198,20 @@ export function buildApiMessageAction(action: GramJs.TypeMessageAction): ApiMess
       isFromRequest: fromRequest,
       domain,
       app: app && buildApiBotApp(app),
+    };
+  }
+  if (action instanceof GramJs.MessageActionRequestedPeer) {
+    return {
+      mediaType: 'action',
+      type: 'requestedPeer',
+      peerIds: action.peers.map(getApiChatIdFromMtpPeer),
+    };
+  }
+  if (action instanceof GramJs.MessageActionManagedBotCreated) {
+    return {
+      mediaType: 'action',
+      type: 'managedBotCreated',
+      botId: buildApiPeerId(action.botId, 'user'),
     };
   }
   if (action instanceof GramJs.MessageActionBoostApply) {
@@ -259,7 +298,7 @@ export function buildApiMessageAction(action: GramJs.TypeMessageAction): ApiMess
       amount: toJSNumber(amount),
       days,
       cryptoCurrency,
-      cryptoAmount: toJSNumber(cryptoAmount),
+      cryptoAmount,
       message: message && buildApiFormattedText(message),
     };
   }
@@ -319,7 +358,7 @@ export function buildApiMessageAction(action: GramJs.TypeMessageAction): ApiMess
       currency,
       amount: toJSNumber(amount),
       cryptoCurrency,
-      cryptoAmount: toJSNumber(cryptoAmount),
+      cryptoAmount,
       message: message && buildApiFormattedText(message),
     };
   }
@@ -364,7 +403,7 @@ export function buildApiMessageAction(action: GramJs.TypeMessageAction): ApiMess
       amount: toJSNumber(amount),
       stars: toJSNumber(stars),
       cryptoCurrency,
-      cryptoAmount: toJSNumber(cryptoAmount),
+      cryptoAmount,
       transactionId,
     };
   }
@@ -378,10 +417,43 @@ export function buildApiMessageAction(action: GramJs.TypeMessageAction): ApiMess
       currency,
       amount: toJSNumber(amount),
       cryptoCurrency,
-      cryptoAmount: toJSNumber(cryptoAmount),
+      cryptoAmount,
       transactionId,
     };
   }
+
+  if (action instanceof GramJs.MessageActionWalletTonConnectRequest) {
+    return {
+      mediaType: 'action',
+      type: 'walletTonConnectRequest',
+      sessionId: action.sessionId.toString(),
+      expires: action.expires,
+      topic: action.topic,
+      traceId: action.traceId,
+      dappName: action.dappName,
+      isAccepted: action.accepted,
+      isDeclined: action.declined,
+    };
+  }
+
+  if (action instanceof GramJs.MessageActionGramTransfer) {
+    const {
+      amount, peerAddress, transactionId, comment, commentEncrypted,
+    } = action;
+
+    // With the flag set, `comment` holds the base64 payload
+    return {
+      mediaType: 'action',
+      type: 'gramTransfer',
+      // The server signs the amount by direction, as in the wallet history
+      amount: getBigIntAbs(amount),
+      peerAddress,
+      transactionId,
+      comment: commentEncrypted ? undefined : comment,
+      encryptedComment: commentEncrypted ? comment : undefined,
+    };
+  }
+
   if (action instanceof GramJs.MessageActionPrizeStars) {
     const {
       unclaimed, stars, transactionId, boostPeer, giveawayMsgId,
@@ -434,7 +506,7 @@ export function buildApiMessageAction(action: GramJs.TypeMessageAction): ApiMess
   if (action instanceof GramJs.MessageActionStarGiftUnique) {
     const {
       upgrade, transferred, saved, refunded, gift, canExportAt, transferStars, fromId, peer, savedId,
-      resaleAmount, prepaidUpgrade, dropOriginalDetailsStars, fromOffer, canCraftAt,
+      resaleAmount, prepaidUpgrade, dropOriginalDetailsStars, fromOffer, canCraftAt, nameHidden, message,
     } = action;
 
     const starGift = buildApiStarGift(gift);
@@ -443,6 +515,8 @@ export function buildApiMessageAction(action: GramJs.TypeMessageAction): ApiMess
     return {
       mediaType: 'action',
       type: 'starGiftUnique',
+      isNameHidden: nameHidden,
+      message: message && buildApiFormattedText(message),
       isUpgrade: upgrade,
       isTransferred: transferred,
       isSaved: saved,

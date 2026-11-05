@@ -1,9 +1,11 @@
 import {
   Editor,
+  Extension,
   InputRule,
   type JSONContent as TiptapJsonContent,
   mergeAttributes,
   Node as TiptapNode,
+  renderNestedMarkdownContent,
 } from '@tiptap/core';
 import CodeExtension from '@tiptap/extension-code';
 import CodeBlockLowlightExtension from '@tiptap/extension-code-block-lowlight';
@@ -23,20 +25,25 @@ import SubscriptExtension from '@tiptap/extension-subscript';
 import SuperscriptExtension from '@tiptap/extension-superscript';
 import UnderlineExtension from '@tiptap/extension-underline';
 import { splitBlock } from '@tiptap/pm/commands';
-import { redoDepth, undoDepth } from '@tiptap/pm/history';
+import { isHistoryTransaction, redoDepth, undoDepth } from '@tiptap/pm/history';
 import type { Node as ProseMirrorNode, ResolvedPos } from '@tiptap/pm/model';
 import {
   Plugin, TextSelection, type Transaction,
 } from '@tiptap/pm/state';
-import type { EditorView } from '@tiptap/pm/view';
+import type { DecorationSet, EditorView } from '@tiptap/pm/view';
 import StarterKitExtension from '@tiptap/starter-kit';
 import type { ElementRef } from '../../../../lib/teact/teact';
 
 import type { CustomEmojiNodeOptions } from '../../../../util/tiptap/extensions/customEmoji';
 import type { RichEditorDateClickTarget } from '../../../../util/tiptap/extensions/date';
+import type { RichEditorMediaItem } from '../../../../util/tiptap/richMedia';
 import type { RichEditorTooltipsConfig } from '../../../common/tooltips/types';
+import type { RichEditorMediaEditHandler, RichEditorMediaFilesHandler } from '../richEditorTypes';
 
-import { lowlight } from '../../../../util/highlightCode';
+import { requestMutation } from '../../../../lib/fasterdom/fasterdom';
+import { validateFiles } from '../../../../util/files';
+import { CODE_HIGHLIGHTING_CHANGED_META, lowlight } from '../../../../util/highlightCode';
+import { addLocalizationCallback, getTranslationFn } from '../../../../util/localization';
 import {
   CustomEmojiNode,
   DateMark,
@@ -53,6 +60,7 @@ import {
 import {
   CAPTION_NODE_NAME,
   FOOTER_NODE_NAME,
+  MEDIA_NODE_NAME,
   TABLE_TITLE_NODE_NAME,
 } from '../../../../util/tiptap/constants';
 import {
@@ -61,6 +69,7 @@ import {
   parseRichMarkdownToken,
   RE_RICH_MARKDOWN_LINK_INPUT,
 } from '../../../../util/tiptap/richMarkdown';
+import { getRichEditorMediaAttrs, getRichMediaUpload } from '../../../../util/tiptap/richMedia';
 import setEditorContentWithoutHistory from '../../../../util/tiptap/setEditorContentWithoutHistory';
 import styles from '../../../../util/tiptap/styling.module.scss';
 import { buildRichEditorFormatting } from '../../../ui/textInput/richEditorFormatting';
@@ -69,7 +78,11 @@ import { RichEditorBotApiHtml } from './richEditorBotApiHtml';
 import { RichEditorCaption } from './richEditorCaption';
 import { RichEditorMarkdown } from './richEditorMarkdown';
 import { RichEditorPullquote } from './richEditorPullquote';
-import { buildRichEditorTableExtensions, RichEditorTableTitle } from './richEditorTable';
+import {
+  buildRichEditorTableExtensions,
+  RichEditorTableControlsExtension,
+  RichEditorTableTitle,
+} from './richEditorTable';
 import { RichEditorTextReplacements } from './richEditorTextReplacements';
 
 import { requestSharedCanvasCoordsRecalculation } from '../../../../hooks/useCoordsInSharedCanvas';
@@ -80,6 +93,7 @@ import {
 } from '../../../common/tooltips/extensions/RichEditorTooltips';
 import EditableCodeBlock from '../richInput/EditableCodeBlock';
 import EditableListItem from '../richInput/EditableListItem';
+import { buildRichEditorMedia } from '../richInput/EditableMedia';
 
 export const RICH_HEADING_LEVELS: [1, 2, 3, 4, 5, 6] = [1, 2, 3, 4, 5, 6];
 export type RichHeadingLevel = typeof RICH_HEADING_LEVELS[number];
@@ -111,21 +125,19 @@ type CreateRichEditorParams = {
   sharedCanvasRef?: ElementRef<HTMLCanvasElement>;
   sharedCanvasHqRef?: ElementRef<HTMLCanvasElement>;
   content: TiptapJsonContent;
-  blockPlaceholder: string;
-  pullquotePlaceholder: string;
-  quoteCaptionPlaceholder: string;
-  tableTitlePlaceholder: string;
-  unsupportedPlaceholder: string;
   getIsRichInputExpanded: () => boolean;
+  getCanInsertMedia: (type: RichEditorMediaItem['type']) => boolean;
   onUpdate: (editor: Editor) => void;
   onDateClick: (target: RichEditorDateClickTarget) => void;
+  onMediaEdit: RichEditorMediaEditHandler;
+  onMediaFiles: RichEditorMediaFilesHandler;
   tooltips?: RichEditorTooltipsConfig;
 };
 
-type RichEditorPlaceholderParams = Pick<
-  CreateRichEditorParams,
-  'blockPlaceholder' | 'pullquotePlaceholder' | 'quoteCaptionPlaceholder' | 'tableTitlePlaceholder'
->;
+import { ButtonRowExtension, RichButtonExtension } from '../../../../util/tiptap/extensions/richButton';
+
+import RichEditorButton from '../RichEditorButton';
+import RichEditorButtonRow from '../RichEditorButtonRow';
 
 const CODE_BLOCK_TAB_SIZE = 2;
 const TOP_LEVEL_PARAGRAPH_DEPTH = 1;
@@ -137,47 +149,124 @@ const NESTED_LIST_TEXT_OFFSET = 3;
 const ORDERED_LIST_REVERSED_ATTR = 'reversed';
 const DEFAULT_TEXT_BLOCK_NODE_TYPE = 'paragraph';
 const RICH_TEXT_INLINE_CONTENT = 'inline*';
+const REFRESH_LANG = 'refreshLang';
+const getFalse = () => false;
+const ignoreMediaEdit = () => undefined;
+const ignoreMediaFiles = () => undefined;
+const EMPTY_CUSTOM_EMOJI_OPTIONS: CustomEmojiNodeOptions = {};
+const mediaDropPositionByView = new WeakMap<EditorView, number>();
+const mediaDropIndicatorByView = new WeakMap<EditorView, HTMLElement>();
+
+// Undo/redo drops unrecoverable media and its captions, with cleanup included in the same history event
+const RichEditorHistory = Extension.create({
+  name: 'richEditorHistory',
+
+  addProseMirrorPlugins() {
+    return [new Plugin({
+      appendTransaction(transactions, oldState, newState) {
+        if (!transactions.some(isHistoryTransaction)) return undefined;
+
+        const transaction = newState.tr;
+        newState.doc.descendants((node, position) => {
+          if (node.type.name !== MEDIA_NODE_NAME) return undefined;
+
+          const attrs = getRichEditorMediaAttrs(node.toJSON());
+          const items = attrs?.items.filter((item) => {
+            const media = item.media || getRichMediaUpload(item.uploadId)?.preview;
+            return media?.mediaType === item.type;
+          });
+          if (items?.length && items.length === attrs!.items.length) return false;
+
+          const from = transaction.mapping.map(position);
+          if (items?.length) {
+            transaction.setNodeMarkup(from, undefined, { ...attrs, items });
+          } else {
+            transaction.deleteRange(from, from + node.nodeSize);
+          }
+          return false;
+        });
+
+        return transaction.docChanged ? transaction : undefined;
+      },
+    })];
+  },
+});
 
 export function __createRichEditor({
   element,
   sharedCanvasRef,
   sharedCanvasHqRef,
   content,
-  blockPlaceholder,
-  pullquotePlaceholder,
-  quoteCaptionPlaceholder,
-  tableTitlePlaceholder,
-  unsupportedPlaceholder,
   getIsRichInputExpanded,
+  getCanInsertMedia,
   onUpdate,
   onDateClick,
+  onMediaEdit,
+  onMediaFiles,
   tooltips,
 }: CreateRichEditorParams) {
   const richEditor = new Editor({
     element: { mount: element } as unknown as HTMLElement,
     extensions: buildRichEditorExtensions(
-      blockPlaceholder,
-      pullquotePlaceholder,
-      quoteCaptionPlaceholder,
-      tableTitlePlaceholder,
-      unsupportedPlaceholder,
       onDateClick,
       tooltips,
       getIsRichInputExpanded,
+      onMediaEdit,
+      onMediaFiles,
       { sharedCanvasRef, sharedCanvasHqRef },
     ),
     editorProps: {
       handleKeyDown: handleRichEditorKeyDown,
+      handleDrop: (view, event) => handleRichEditorDrop(
+        view, event, getIsRichInputExpanded, onMediaFiles,
+      ),
+      handleDOMEvents: {
+        dragover: (view, event) => handleRichEditorDragOver(view, event, getIsRichInputExpanded),
+        dragleave: handleRichEditorDragLeave,
+      },
     },
     onUpdate: ({ editor }) => {
       onUpdate(editor);
       requestSharedCanvasCoordsRecalculation(sharedCanvasRef, sharedCanvasHqRef);
     },
+    onDestroy: () => removeRichEditorDropIndicator(richEditor.view),
   });
+
+  // Saved content and existing media remain editable; paste and history cannot add restricted media
+  richEditor.registerPlugin(new Plugin({
+    filterTransaction(transaction, state) {
+      if (!transaction.docChanged || transaction.getMeta('preventUpdate')
+        || (getCanInsertMedia('photo') && getCanInsertMedia('video')
+          && getCanInsertMedia('document') && getCanInsertMedia('audio'))) return true;
+
+      const previousCounts = getRestrictedMediaCounts(state.doc, getCanInsertMedia);
+      const nextCounts = getRestrictedMediaCounts(transaction.doc, getCanInsertMedia);
+      return [...nextCounts].every(([id, count]) => count <= (previousCounts.get(id) || 0));
+    },
+  }));
 
   setEditorContentWithoutHistory(richEditor, content);
 
   return richEditor;
+}
+
+function getRestrictedMediaCounts(
+  doc: ProseMirrorNode,
+  getCanInsertMedia: CreateRichEditorParams['getCanInsertMedia'],
+) {
+  const counts = new Map<string, number>();
+  doc.descendants((node) => {
+    if (node.type.name !== MEDIA_NODE_NAME) return;
+
+    const attrs = getRichEditorMediaAttrs(node.toJSON());
+    attrs?.items.forEach((item) => {
+      if (getCanInsertMedia(item.type)) return;
+
+      const id = `${item.type}-${item.media?.id || item.uploadId}`;
+      counts.set(id, (counts.get(id) || 0) + 1);
+    });
+  });
+  return counts;
 }
 
 export function __getRichEditorCanUndo(editor: Editor) {
@@ -188,18 +277,79 @@ export function __getRichEditorCanRedo(editor: Editor) {
   return Boolean(redoDepth(editor.state));
 }
 
+export function __buildRichEditorSchemaExtensions() {
+  return buildRichEditorSchemaExtensions(
+    getFalse, EMPTY_CUSTOM_EMOJI_OPTIONS, ignoreMediaEdit, ignoreMediaFiles,
+  );
+}
+
 function buildRichEditorExtensions(
-  blockPlaceholder: string,
-  pullquotePlaceholder: string,
-  quoteCaptionPlaceholder: string,
-  tableTitlePlaceholder: string,
-  unsupportedPlaceholder: string,
   onDateClick: (target: RichEditorDateClickTarget) => void,
   tooltips: RichEditorTooltipsConfig | undefined,
   getIsRichInputExpanded: () => boolean,
+  onMediaEdit: RichEditorMediaEditHandler,
+  onMediaFiles: RichEditorMediaFilesHandler,
   customEmojiOptions: CustomEmojiNodeOptions,
 ) {
   const extensions = [
+    ...buildRichEditorSchemaExtensions(
+      getIsRichInputExpanded, customEmojiOptions, onMediaEdit, onMediaFiles, onDateClick,
+    ),
+    RichEditorMarkdown,
+    RichEditorHistory,
+    RichEditorTextReplacements,
+    buildRichEditorFormatting(getIsRichInputExpanded),
+    RichEditorBotApiHtml,
+    buildRichEditorPlaceholder(),
+    RichEditorTableControlsExtension,
+  ];
+
+  if (tooltips) extensions.push(buildRichEditorTooltips(tooltips));
+  return extensions;
+}
+
+function buildRichComposerSchemaExtensions() {
+  return [
+    RichButtonExtension.extend({
+      addNodeView() {
+        return TeactNodeViewRenderer(RichEditorButton, { as: 'span', className: styles.richButtonNode });
+      },
+    }),
+    ButtonRowExtension.extend({
+      addNodeView() {
+        return TeactNodeViewRenderer(RichEditorButtonRow);
+      },
+    }),
+    DetailsExtension.configure({
+      persist: true,
+      openClassName: styles.detailsOpen,
+      HTMLAttributes: {
+        class: styles.details,
+      },
+      renderToggleButton: handleRenderDetailsToggleButton,
+    }),
+    RichEditorDetailsSummary.configure({
+      HTMLAttributes: {
+        class: styles.detailsSummary,
+      },
+    }),
+    RichEditorDetailsContent.configure({
+      HTMLAttributes: {
+        class: styles.detailsContent,
+      },
+    }),
+    ...buildRichEditorTableExtensions(),
+  ];
+}
+
+function buildRichEditorSchemaExtensions(
+  getIsRichInputExpanded: () => boolean,
+  customEmojiOptions: CustomEmojiNodeOptions,
+  onMediaEdit: RichEditorMediaEditHandler,
+  onMediaFiles: RichEditorMediaFilesHandler,
+  onDateClick?: (target: RichEditorDateClickTarget) => void,
+) {
+  return [
     StarterKitExtension.configure({
       blockquote: false,
       bulletList: false,
@@ -236,7 +386,6 @@ function buildRichEditorExtensions(
       },
     }),
     RichEditorStrike,
-    RichEditorMarkdown,
     buildRichEditorBlockquote(getIsRichInputExpanded).configure({
       HTMLAttributes: {
         class: styles.blockquote,
@@ -263,10 +412,7 @@ function buildRichEditorExtensions(
       enableTabIndentation: true,
       tabSize: CODE_BLOCK_TAB_SIZE,
     }),
-    RichEditorTextReplacements,
-    buildRichEditorFormatting(getIsRichInputExpanded),
-    RichEditorBotApiHtml,
-    HeadingExtension.configure({
+    RichEditorHeading.configure({
       levels: RICH_HEADING_LEVELS,
       HTMLAttributes: {
         class: styles.heading,
@@ -290,22 +436,16 @@ function buildRichEditorExtensions(
       },
     }),
     RichEditorUnderline,
-    buildRichEditorPlaceholder({
-      blockPlaceholder,
-      pullquotePlaceholder,
-      quoteCaptionPlaceholder,
-      tableTitlePlaceholder,
-    }),
     RichEditorDate.configure({ onClick: onDateClick }),
     FormattedDateNode.configure({ onClick: onDateClick }),
     SpoilerMark,
     MarkedTextMark,
-    SubscriptExtension.configure({
+    RichEditorSubscript.configure({
       HTMLAttributes: {
         class: styles.subscript,
       },
     }),
-    SuperscriptExtension.configure({
+    RichEditorSuperscript.configure({
       HTMLAttributes: {
         class: styles.superscript,
       },
@@ -315,24 +455,20 @@ function buildRichEditorExtensions(
     MentionNode,
     MathBlockNode,
     MathInlineNode,
-    UnsupportedNode.configure({ label: unsupportedPlaceholder }),
+    UnsupportedNode,
+    buildRichEditorMedia(onMediaEdit, onMediaFiles),
+    ...buildRichComposerSchemaExtensions(),
   ];
-
-  if (tooltips) {
-    extensions.push(buildRichEditorTooltips(tooltips));
-  }
-  extensions.push(...buildRichComposerExtensions());
-
-  return extensions;
 }
 
-function buildRichEditorPlaceholder(params: RichEditorPlaceholderParams) {
+function buildRichEditorPlaceholder() {
   // The placeholder state field owns the document used to calculate callback positions
   let currentDoc: ProseMirrorNode;
   return PlaceholderExtension.extend({
     addProseMirrorPlugins() {
       const [plugin] = this.parent!();
       const stateField = plugin.spec.state!;
+      let currentConfig: Parameters<typeof stateField.init>[0];
 
       return [
         new Plugin({
@@ -341,13 +477,27 @@ function buildRichEditorPlaceholder(params: RichEditorPlaceholderParams) {
             ...stateField,
             init(config, state) {
               currentDoc = state.doc;
-              return stateField.init.call(plugin, config, state);
+              currentConfig = config;
+              const decorations = stateField.init.call(plugin, config, state);
+              return filterRichEditorPlaceholderDecorations(state.doc, decorations);
             },
             apply(transaction, value, oldState, newState) {
               currentDoc = newState.doc;
-              return stateField.apply.call(plugin, transaction, value, oldState, newState);
+              if (transaction.getMeta(REFRESH_LANG)) {
+                const decorations = stateField.init.call(plugin, currentConfig, newState);
+                return filterRichEditorPlaceholderDecorations(newState.doc, decorations);
+              }
+              const decorations = stateField.apply.call(plugin, transaction, value, oldState, newState);
+              return filterRichEditorPlaceholderDecorations(newState.doc, decorations);
             },
           },
+        }),
+        new Plugin({
+          view: (view) => ({
+            destroy: addLocalizationCallback(() => {
+              view.dispatch(view.state.tr.setMeta(REFRESH_LANG, true));
+            }),
+          }),
         }),
       ];
     },
@@ -357,11 +507,18 @@ function buildRichEditorPlaceholder(params: RichEditorPlaceholderParams) {
     },
     includeChildren: true,
     placeholder: ({ node, pos }) => {
-      return getRichEditorPlaceholder(node, currentDoc.resolve(pos).parent, params);
+      return getRichEditorPlaceholder(node, currentDoc.resolve(pos).parent);
     },
     showOnlyCurrent: false,
     showOnlyWhenEditable: false,
   });
+}
+
+function filterRichEditorPlaceholderDecorations(doc: ProseMirrorNode, decorations: DecorationSet) {
+  const mediaDecorations = decorations.find().filter(({ from }) => (
+    doc.nodeAt(from)?.type.name === MEDIA_NODE_NAME
+  ));
+  return mediaDecorations.length ? decorations.remove(mediaDecorations) : decorations;
 }
 
 function getRichEditorEmptyNodeClass(node: ProseMirrorNode, parent: ProseMirrorNode) {
@@ -387,26 +544,23 @@ function getRichEditorEmptyNodeClass(node: ProseMirrorNode, parent: ProseMirrorN
 function getRichEditorPlaceholder(
   node: ProseMirrorNode,
   parent: ProseMirrorNode,
-  {
-    blockPlaceholder,
-    pullquotePlaceholder,
-    quoteCaptionPlaceholder,
-    tableTitlePlaceholder,
-  }: RichEditorPlaceholderParams,
 ) {
+  const lang = getTranslationFn();
   if (node.type.name === TABLE_TITLE_NODE_NAME) {
-    return tableTitlePlaceholder;
+    return lang('InputTitle');
   }
 
   if (node.type.name === CAPTION_NODE_NAME) {
-    return quoteCaptionPlaceholder;
+    return lang('RichEditorQuoteCaptionPlaceholder');
   }
 
   if (node.type.name !== 'paragraph') {
-    return blockPlaceholder;
+    return lang('RichEditorBlockPlaceholder');
   }
 
-  return parent.type.name === 'pullquote' ? pullquotePlaceholder : blockPlaceholder;
+  return lang(parent.type.name === 'pullquote'
+    ? 'RichEditorPullquotePlaceholder'
+    : 'RichEditorBlockPlaceholder');
 }
 
 function handleRichEditorKeyDown(view: EditorView, event: KeyboardEvent) {
@@ -438,6 +592,104 @@ function handleRichEditorKeyDown(view: EditorView, event: KeyboardEvent) {
 
   event.preventDefault();
   return splitBlock(view.state, view.dispatch);
+}
+
+function handleRichEditorDrop(
+  view: EditorView,
+  event: DragEvent,
+  getIsRichInputExpanded: () => boolean,
+  onMediaFiles: RichEditorMediaFilesHandler,
+) {
+  if (!event.dataTransfer || !getIsRichInputExpanded()) {
+    return false;
+  }
+
+  const files = validateFiles(event.dataTransfer.files);
+  if (!files?.length) {
+    return false;
+  }
+
+  const dropPosition = getRichEditorBlockDropPosition(view, event)
+    ?? mediaDropPositionByView.get(view)
+    ?? view.state.selection.from;
+  removeRichEditorDropIndicator(view);
+  onMediaFiles(files, dropPosition, false);
+  event.preventDefault();
+  return true;
+}
+
+function handleRichEditorDragOver(
+  view: EditorView,
+  event: DragEvent,
+  getIsRichInputExpanded: () => boolean,
+) {
+  if (!getIsRichInputExpanded() || !event.dataTransfer?.types.includes('Files')) {
+    removeRichEditorDropIndicator(view);
+    return false;
+  }
+
+  const position = getRichEditorBlockDropPosition(view, event);
+  if (position === undefined) return false;
+
+  const editorRect = view.dom.getBoundingClientRect();
+  const coordinates = view.coordsAtPos(position);
+  mediaDropPositionByView.set(view, position);
+  event.preventDefault();
+  requestMutation(() => {
+    let indicator = mediaDropIndicatorByView.get(view);
+    if (!indicator) {
+      indicator = document.createElement('div');
+      indicator.className = styles.mediaDropIndicator;
+      document.body.append(indicator);
+      mediaDropIndicatorByView.set(view, indicator);
+    }
+    indicator.style.left = `${editorRect.left}px`;
+    indicator.style.top = `${coordinates.top}px`;
+    indicator.style.width = `${editorRect.width}px`;
+  });
+  return true;
+}
+
+function handleRichEditorDragLeave(view: EditorView, event: DragEvent) {
+  const nextTarget = event.relatedTarget;
+  if (nextTarget instanceof Node && view.dom.contains(nextTarget)) {
+    return false;
+  }
+
+  removeRichEditorDropIndicator(view);
+  return false;
+}
+
+function getRichEditorBlockDropPosition(view: EditorView, event: DragEvent) {
+  const lastBlock = view.dom.lastElementChild;
+  if (lastBlock && event.clientY >= lastBlock.getBoundingClientRect().bottom) {
+    return view.state.doc.content.size;
+  }
+
+  const rawPosition = view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos;
+  if (rawPosition === undefined) return undefined;
+
+  const resolvedPosition = view.state.doc.resolve(rawPosition);
+  if (!resolvedPosition.depth) return rawPosition;
+
+  const blockPosition = resolvedPosition.before(1);
+  const block = resolvedPosition.node(1);
+  const blockElement = view.nodeDOM(blockPosition);
+  if (!(blockElement instanceof HTMLElement)) return blockPosition;
+
+  const blockRect = blockElement.getBoundingClientRect();
+  return event.clientY > blockRect.top + blockRect.height / 2
+    ? blockPosition + block.nodeSize
+    : blockPosition;
+}
+
+function removeRichEditorDropIndicator(view: EditorView) {
+  mediaDropPositionByView.delete(view);
+  const indicator = mediaDropIndicatorByView.get(view);
+  if (!indicator) return;
+
+  mediaDropIndicatorByView.delete(view);
+  requestMutation(() => indicator.remove());
 }
 
 export function __isRichEditorEmpty(editor: Editor) {
@@ -606,7 +858,10 @@ type RichEditorAncestor = {
   position: number;
 };
 
-function findCurrentRichEditorAncestor($from: ResolvedPos, type: 'list' | 'listItem'): RichEditorAncestor | undefined {
+function findCurrentRichEditorAncestor(
+  $from: ResolvedPos,
+  type: 'list' | 'listItem',
+): RichEditorAncestor | undefined {
   for (let depth = $from.depth; depth > 0; depth--) {
     const node = $from.node(depth);
     const isMatch = type === 'listItem'
@@ -686,7 +941,10 @@ const RichEditorFooter = TiptapNode.create({
   },
 
   parseHTML() {
-    return [{ tag: 'footer' }];
+    return [
+      { tag: 'footer' },
+      { tag: 'p[data-rich-block-type="footer"]' },
+    ];
   },
 
   renderHTML({ HTMLAttributes }) {
@@ -764,6 +1022,31 @@ function wrapRichOnlyInputRules(
 }
 
 const RichEditorCodeBlock = CodeBlockLowlightExtension.extend({
+  addProseMirrorPlugins() {
+    const plugins = this.parent!();
+    // The last plugin owns the syntax decorations
+    const plugin = plugins.pop()!;
+    const stateField = plugin.spec.state!;
+    let currentConfig: Parameters<typeof stateField.init>[0];
+
+    plugins.push(new Plugin({
+      ...plugin.spec,
+      state: {
+        init(config, state) {
+          currentConfig = config;
+          return stateField.init.call(plugin, config, state);
+        },
+        apply(transaction, value, oldState, newState) {
+          if (transaction.getMeta(CODE_HIGHLIGHTING_CHANGED_META)) {
+            return stateField.init.call(plugin, currentConfig, newState);
+          }
+          return stateField.apply.call(plugin, transaction, value, oldState, newState);
+        },
+      },
+    }));
+    return plugins;
+  },
+
   addKeyboardShortcuts() {
     return {
       ...this.parent?.(),
@@ -862,6 +1145,24 @@ const RichEditorDate = DateMark.extend({
   },
 });
 
+const RichEditorHeading = HeadingExtension.extend({
+  priority: 110,
+
+  parseHTML() {
+    return [
+      ...(this.parent?.() || []),
+      ...RICH_HEADING_LEVELS.map((level) => ({
+        tag: `p[data-rich-block-type="heading${level}"]`,
+        attrs: { level },
+      })),
+      { tag: 'p[data-rich-block-type="header"]', attrs: { level: 1 } },
+      { tag: 'p[data-rich-block-type="title"]', attrs: { level: 1 } },
+      { tag: 'p[data-rich-block-type="subheader"]', attrs: { level: 2 } },
+      { tag: 'p[data-rich-block-type="subtitle"]', attrs: { level: 2 } },
+    ];
+  },
+});
+
 const RichEditorUnderline = UnderlineExtension.extend({
   markdownTokenizer: {
     name: 'underline',
@@ -880,6 +1181,22 @@ const RichEditorUnderline = UnderlineExtension.extend({
         getAttrs: (style) => (style.includes('underline') ? {} : false),
       },
     ];
+  },
+
+  renderMarkdown(node, helpers) {
+    return `<u>${helpers.renderChildren(node)}</u>`;
+  },
+});
+
+const RichEditorSubscript = SubscriptExtension.extend({
+  renderMarkdown(node, helpers) {
+    return `<sub>${helpers.renderChildren(node)}</sub>`;
+  },
+});
+
+const RichEditorSuperscript = SuperscriptExtension.extend({
+  renderMarkdown(node, helpers) {
+    return `<sup>${helpers.renderChildren(node)}</sup>`;
   },
 });
 
@@ -967,6 +1284,19 @@ const RichEditorListItem = ListItem.extend({
     return { dom: element, contentDOM: element };
   },
 
+  renderMarkdown(node, helpers, context) {
+    if (!node.attrs?.[LIST_ITEM_CHECKBOX_ATTR]) {
+      return this.parent!(node, helpers, context);
+    }
+
+    return renderNestedMarkdownContent(
+      node,
+      helpers,
+      `- [${node.attrs[LIST_ITEM_CHECKED_ATTR] ? 'x' : ' '}] `,
+      context,
+    );
+  },
+
   addNodeView() {
     return TeactNodeViewRenderer(EditableListItem, {
       as: 'li',
@@ -975,32 +1305,25 @@ const RichEditorListItem = ListItem.extend({
   },
 });
 
-function buildRichComposerExtensions() {
-  return [
-    DetailsExtension.configure({
-      persist: true,
-      openClassName: styles.detailsOpen,
-      HTMLAttributes: {
-        class: styles.details,
-      },
-      renderToggleButton: handleRenderDetailsToggleButton,
-    }),
-    RichEditorDetailsSummary.configure({
-      HTMLAttributes: {
-        class: styles.detailsSummary,
-      },
-    }),
-    DetailsContentExtension.configure({
-      HTMLAttributes: {
-        class: styles.detailsContent,
-      },
-    }),
-    ...buildRichEditorTableExtensions(),
-  ];
-}
-
 const RichEditorDetailsSummary = DetailsSummaryExtension.extend({
   content: RICH_TEXT_INLINE_CONTENT,
+
+  renderMarkdown(node, helpers) {
+    return helpers.renderChildren(node);
+  },
+});
+
+const RichEditorDetailsContent = DetailsContentExtension.extend({
+  parseHTML() {
+    return [
+      { tag: '[data-rich-block-type="detailsContent"]' },
+      ...(this.parent?.() || []),
+    ];
+  },
+
+  renderMarkdown(node, helpers) {
+    return helpers.renderChildren(node.content || [], '\n\n');
+  },
 });
 
 function handleRenderDetailsToggleButton({ element, isOpen }: DetailsRenderToggleButtonOptions) {

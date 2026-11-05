@@ -1,22 +1,23 @@
-import type { FC } from '../../../lib/teact/teact';
 import { memo, useCallback, useMemo } from '../../../lib/teact/teact';
 import { getActions, getGlobal, withGlobal } from '../../../global';
 
 import type { ApiMessage } from '../../../api/types';
 import type { StateProps } from './helpers/createMapStateToProps';
-import { AudioOrigin, LoadMoreDirection } from '../../../types';
+import { MAIN_THREAD_ID } from '../../../api/types';
+import { LoadMoreDirection } from '../../../types';
 
 import { SLIDE_TRANSITION_DURATION } from '../../../config';
 import { getIsDownloading } from '../../../global/helpers';
 import { selectMessageDownloadableMedia } from '../../../global/selectors/media';
-import { formatMonthAndYear, toYearMonth } from '../../../util/dates/oldDateFormat';
+import { toYearMonth } from '../../../util/dates/dateMath';
 import { parseSearchResultKey } from '../../../util/keys/searchResultKey';
+import { formatDateTime, secondsToDate } from '../../../util/localization/dateFormat';
 import { MEMO_EMPTY_ARRAY } from '../../../util/memo';
 import { throttle } from '../../../util/schedulers';
 import { createMapStateToProps } from './helpers/createMapStateToProps';
 import { getSenderName } from './helpers/getSenderName';
 
-import useOldLang from '../../../hooks/useOldLang';
+import useLang from '../../../hooks/useLang';
 import useAsyncRendering from '../../right/hooks/useAsyncRendering';
 
 import Audio from '../../common/Audio';
@@ -33,7 +34,7 @@ export type OwnProps = {
 
 const runThrottled = throttle((cb) => cb(), 500, true);
 
-const AudioResults: FC<OwnProps & StateProps> = ({
+const AudioResults = ({
   theme,
   isVoice,
   searchQuery,
@@ -43,14 +44,14 @@ const AudioResults: FC<OwnProps & StateProps> = ({
   globalMessagesByChatId,
   foundIds,
   activeDownloads,
-}) => {
+}: OwnProps & StateProps) => {
   const {
     searchMessagesGlobal,
     focusMessage,
     openAudioPlayer,
   } = getActions();
 
-  const lang = useOldLang();
+  const lang = useLang();
   const currentType = isVoice ? 'voice' : 'audio';
   const handleLoadMore = useCallback(({ direction }: { direction: LoadMoreDirection }) => {
     if (direction === LoadMoreDirection.Backwards) {
@@ -80,7 +81,11 @@ const AudioResults: FC<OwnProps & StateProps> = ({
   }, [focusMessage]);
 
   const handlePlayAudio = useCallback((messageId: number, chatId: string) => {
-    openAudioPlayer({ chatId, messageId });
+    openAudioPlayer({
+      item: {
+        type: 'message', chatId, threadId: MAIN_THREAD_ID, messageId,
+      },
+    });
   }, [openAudioPlayer]);
 
   function renderList() {
@@ -99,7 +104,7 @@ const AudioResults: FC<OwnProps & StateProps> = ({
               key={message.date}
               dir={lang.isRtl ? 'rtl' : undefined}
             >
-              {formatMonthAndYear(lang, new Date(message.date * 1000))}
+              {formatDateTime(lang, secondsToDate(message.date), { date: 'long', includeDay: false })}
             </p>
           )}
           <div
@@ -110,7 +115,7 @@ const AudioResults: FC<OwnProps & StateProps> = ({
               key={message.id}
               theme={theme}
               message={message}
-              origin={AudioOrigin.Search}
+              variant="search"
               senderTitle={getSenderName(lang, message, chatsById, usersById)}
               date={message.date}
               className="scroll-item"
@@ -144,8 +149,8 @@ const AudioResults: FC<OwnProps & StateProps> = ({
         {canRenderContents && (!foundIds || foundIds.length === 0) && (
           <NothingFound
             withSticker
-            text={lang('ChatList.Search.NoResults')}
-            description={lang('ChatList.Search.NoResultsDescription')}
+            text={lang('ChatListSearchNoResults')}
+            description={lang('ChatListSearchNoResultsDescription')}
           />
         )}
         {canRenderContents && foundIds && foundIds.length > 0 && (

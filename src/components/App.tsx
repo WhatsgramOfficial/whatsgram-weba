@@ -6,7 +6,7 @@ import type { ThemeKey } from '../types';
 import type { UiLoaderPage } from './common/UiLoader';
 
 import {
-  DARK_THEME_BG_COLOR, INACTIVE_MARKER, LIGHT_THEME_BG_COLOR, PAGE_TITLE, PAGE_TITLE_TAURI,
+  DARK_THEME_BG_COLOR, LIGHT_THEME_BG_COLOR, PAGE_TITLE, PAGE_TITLE_TAURI,
 } from '../config';
 import { forceMutation } from '../lib/fasterdom/stricterdom.ts';
 import {
@@ -17,14 +17,19 @@ import { IS_INSTALL_PROMPT_SUPPORTED, PLATFORM_ENV } from '../util/browser/windo
 import buildClassName from '../util/buildClassName';
 import { setupBeforeInstallPrompt } from '../util/installPrompt';
 import { ACCOUNT_SLOT, getAccountSlotUrl, getFirstLoggedInAccountSlot } from '../util/multiaccount';
-import { hasEncryptedSession } from '../util/passcode';
-import { getInitialLocationHash, parseInitialLocationHash } from '../util/routing';
+import { hasLegacyEncryptedSession } from '../util/passcode';
+import { getInitialLocationHash, getPendingWebLogin } from '../util/routing';
 import { checkSessionLocked, hasStoredSession } from '../util/sessions';
 import { getActionMessageBg, getWallpaperBaseColor } from '../util/wallpaper';
+import { handoffWebLogin } from '../util/webLoginHandoff';
 import { updateSizes } from '../util/windowSize';
 
 import useTauriDrag from '../hooks/tauri/useTauriDrag';
 import useAppLayout from '../hooks/useAppLayout';
+import useFileHoverOpen, {
+  FILE_HOVER_OPEN_SELECTOR, hasFiles,
+} from '../hooks/useFileHoverOpen';
+import useLang from '../hooks/useLang';
 import usePrevious from '../hooks/usePrevious';
 import { useSignalEffect } from '../hooks/useSignalEffect';
 import { getIsInBackground } from '../hooks/window/useBackgroundMode';
@@ -61,7 +66,6 @@ enum AppScreens {
 
 const TRANSITION_RENDER_COUNT = Object.keys(AppScreens).length / 2;
 const ACTIVE_PAGE_TITLE = IS_TAURI ? PAGE_TITLE_TAURI : PAGE_TITLE;
-const INACTIVE_PAGE_TITLE = `${ACTIVE_PAGE_TITLE} ${INACTIVE_MARKER}`;
 
 const App = ({
   authState,
@@ -74,6 +78,8 @@ const App = ({
   customBackgroundColor,
   actionMessageBg,
 }: StateProps) => {
+  const lang = useLang();
+
   const { isMobile } = useAppLayout();
   const isMobileOs = PLATFORM_ENV === 'iOS' || PLATFORM_ENV === 'Android';
 
@@ -86,7 +92,7 @@ const App = ({
   useEffect(() => {
     const hash = getInitialLocationHash();
     // If there is no stored session on first slot, navigate to any other slot with stored session
-    if (!hasStoredSession() && !ACCOUNT_SLOT && !hash) {
+    if (!getPendingWebLogin() && !hasStoredSession() && !ACCOUNT_SLOT && !hash) {
       const firstLoggedInAccountSlot = getFirstLoggedInAccountSlot();
       if (firstLoggedInAccountSlot) {
         const url = getAccountSlotUrl(firstLoggedInAccountSlot);
@@ -94,14 +100,13 @@ const App = ({
       }
     }
 
-    // TODO[Passcode]: Remove when multiacc passcode is implemented
-    const checkMultiaccPasscode = async () => {
-      if (checkSessionLocked() && ACCOUNT_SLOT && await hasEncryptedSession()) {
-        const url = getAccountSlotUrl(1);
-        window.location.href = url;
-      }
-    };
-    checkMultiaccPasscode();
+    if (checkSessionLocked() && ACCOUNT_SLOT) {
+      void hasLegacyEncryptedSession().then(async (hasLegacySession) => {
+        if (hasLegacySession && !await handoffWebLogin(getAccountSlotUrl(1))) {
+          window.location.replace(getAccountSlotUrl(1));
+        }
+      }).catch(() => undefined);
+    }
   }, []);
 
   // Prevent drop on elements that do not accept it
@@ -110,8 +115,11 @@ const App = ({
     const handleDrag = (e: DragEvent) => {
       e.preventDefault();
       if (!e.dataTransfer) return;
-      if (!(e.target as HTMLElement).dataset.dropzone) {
-        e.dataTransfer.dropEffect = 'none';
+      if (!(e.target instanceof Element && e.target.closest('[data-dropzone]'))) {
+        const isFileHoverOpen = hasFiles(e.dataTransfer)
+          && e.target instanceof Element
+          && Boolean(e.target.closest(FILE_HOVER_OPEN_SELECTOR));
+        e.dataTransfer.dropEffect = isFileHoverOpen ? 'link' : 'none';
       } else {
         e.dataTransfer.dropEffect = 'copy';
       }
@@ -182,7 +190,7 @@ const App = ({
   if (activeKey !== AppScreens.lock
     && activeKey !== AppScreens.inactive
     && activeKey !== AppScreens.main
-    && parseInitialLocationHash()?.tgWebAuthToken
+    && getPendingWebLogin()
     && !hasWebAuthTokenFailed) {
     page = 'main';
     activeKey = AppScreens.main;
@@ -194,11 +202,11 @@ const App = ({
 
   useEffect(() => {
     if (inactiveReason) {
-      document.title = INACTIVE_PAGE_TITLE;
+      document.title = `${ACTIVE_PAGE_TITLE} ${lang('PageTitleInactive')}`;
     } else {
       document.title = ACTIVE_PAGE_TITLE;
     }
-  }, [inactiveReason]);
+  }, [inactiveReason, lang]);
 
   const prevActiveKey = usePrevious(activeKey);
 
@@ -216,9 +224,11 @@ const App = ({
   }
 
   useTauriDrag();
+  useFileHoverOpen();
 
   useLayoutEffect(() => {
     document.body.classList.add(styles.bg);
+    document.documentElement.classList.remove('initial');
   }, []);
 
   useLayoutEffect(() => {
@@ -261,7 +271,7 @@ const App = ({
       >
         {renderContent}
       </Transition>
-      {activeKey === AppScreens.auth && isTestServer && <div className="test-server-badge">Test server</div>}
+      {activeKey === AppScreens.auth && isTestServer && <div className="test-server-badge">{lang('TestServer')}</div>}
       <Notifications />
     </UiLoader>
   );

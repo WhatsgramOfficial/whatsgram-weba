@@ -15,6 +15,7 @@ export interface SharedSettings {
   themes: Partial<Record<ThemeKey, IThemeSettings>>;
   language: string;
   languages?: ApiLanguage[];
+  customLanguages?: ApiLanguage[];
   performance: PerformanceType;
   messageTextSize: number;
   instantViewFontSizeAdjust: number;
@@ -36,4 +37,5 @@ export interface SharedSettings {
   shouldDebugExportedSenders?: boolean;
   shouldWarnAboutFiles?: boolean;
   shouldSkipBrowserCloseConfirmation: boolean;
+  shouldKeepLockScreenBackground: boolean;
 }

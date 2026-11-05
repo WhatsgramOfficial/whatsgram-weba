@@ -1,5 +1,6 @@
 import type { TLMessage } from '../tl/core';
 
+import { throttle } from '../../../util/schedulers';
 import { RPCError, RPCMessageToError } from '../errors';
 import {
   BinaryReader, type Logger, MessagePacker,
@@ -13,10 +14,11 @@ import { UpdateConnectionState, UpdateServerTimeOffset, UpdateSessionGap } from 
 import { type Update } from '../client/TelegramClient';
 import { AuthKey } from '../crypto/AuthKey';
 import {
-  BadMessageError, InvalidBufferError, MessageReplayError, SecurityError, TypeNotFoundError,
+  BadMessageError, InvalidBufferError, PermAuthKeyInvalidError, SecurityError, TypeNotFoundError,
 } from '../errors/Common';
+import { HttpStreamError } from '../extensions/HttpStream';
 import PendingState from '../extensions/PendingState';
-import { jsonStringifyWithBigInt, sleep } from '../Helpers';
+import { generateRandomLong, jsonStringifyWithBigInt, sleep } from '../Helpers';
 import MessageContainer from '../tl/core/MessageContainer';
 import { doAuthentication } from './Authenticator';
 import {
@@ -25,7 +27,7 @@ import {
   MAX_FUTURE_SERVER_SALTS,
 } from './MTProtoConstants';
 import MtProtoPlainSender from './MTProtoPlainSender';
-import MTProtoState from './MTProtoState';
+import MTProtoState, { encryptBindAuthKeyInner } from './MTProtoState';
 import RequestState, { type CallableRequest } from './RequestState';
 
 const LONGPOLL_MAX_WAIT = 3000;
@@ -39,6 +41,21 @@ const MAX_RECENT_ACKNOWLEDGED_MESSAGES = 500;
 const MESSAGE_STATE_RECEIVED = 4;
 const MESSAGE_STATE_NO_ACK_REQUIRED = 16;
 const MESSAGE_STATE_RECEIVED_ELSEWHERE = 128;
+const MAIN_CONNECTION_RETRY_DELAY_MULTIPLIERS = [1, 3, 6, 30, 60];
+const MAX_MAIN_CONNECTION_RETRY_DELAY = 600000;
+const SERVER_SALT_REFRESH_MARGIN = 60;
+const SERVER_SALT_REQUEST_RETRY_DELAY = 60000;
+const MILLISECONDS_PER_SECOND = 1000;
+const TRANSPORT_CODE_LENGTH = 4;
+const MESSAGE_ID_TOO_HIGH_ERROR_CODE = 17;
+const ACK_FLUSH_DELAY = 10000;
+const ACK_FLUSH_THRESHOLD = 16;
+const TEMP_AUTH_KEY_EXPIRES_IN = 86400;
+const TEMP_AUTH_KEY_EXPIRY_MARGIN = 120;
+const PERM_AUTH_KEY_BIND_GRACE = 60;
+const AUTHENTICATION_TIMEOUT = 30000;
+const MAX_CONNECT_REQUEST_ATTEMPTS = 3;
+const AUTH_KEY_NOT_FOUND_ERROR_CODE = 404;
 
 type SentMessage = {
   msgId: bigint;
@@ -62,11 +79,17 @@ interface DefaultOptions {
   delay: number;
   dcId: number;
   senderIndex?: number;
+  timeOffset?: number;
   autoReconnect: boolean;
   shouldForceHttpTransport: boolean;
   shouldAllowHttpTransport: boolean;
   connectTimeout: number;
   authKeyCallback: any;
+  getTempAuthKey: (
+    clusterId: number, create: () => Promise<AuthKey>, isUsable: (authKey: AuthKey) => boolean,
+  ) => Promise<AuthKey>;
+  dropTempAuthKey: (clusterId: number, keyId: bigint) => void;
+  initConnection: (query: Api.AnyRequest) => Api.InvokeWithLayer;
   updateCallback?: any;
   autoReconnectCallback?: any;
   isMainSender?: boolean;
@@ -133,6 +156,8 @@ export default class MTProtoSender {
 
   private _isFallback: boolean;
 
+  private _shouldUseFallbackOnReconnect: boolean;
+
   private readonly _authKeyCallback: any;
 
   public _updateCallback: (
@@ -183,7 +208,21 @@ export default class MTProtoSender {
 
   private _isReconnectingToMain = false;
 
+  private futureServerSaltRefreshTimer?: ReturnType<typeof setTimeout>;
+
+  private futureServerSaltRequest?: Promise<Api.TypeFutureSalts | undefined>;
+
   readonly authKey: AuthKey;
+
+  readonly tempAuthKey = new AuthKey();
+
+  private tempAuthKeyClusterId?: number;
+
+  private readonly getTempAuthKey: DefaultOptions['getTempAuthKey'];
+
+  private readonly dropTempAuthKey: DefaultOptions['dropTempAuthKey'];
+
+  private readonly initConnection: DefaultOptions['initConnection'];
 
   private readonly _state: MTProtoState;
 
@@ -217,12 +256,16 @@ export default class MTProtoSender {
     this._delay = args.delay;
     this._retryMainConnectionDelay = args.retryMainConnectionDelay;
     this._authKeyCallback = args.authKeyCallback;
+    this.getTempAuthKey = args.getTempAuthKey;
+    this.dropTempAuthKey = args.dropTempAuthKey;
+    this.initConnection = args.initConnection;
     this._updateCallback = args.updateCallback;
     this._autoReconnectCallback = args.autoReconnectCallback;
     this._isMainSender = Boolean(args.isMainSender);
     this._isExported = Boolean(args.isExported);
     this._onConnectionBreak = args.onConnectionBreak;
     this._isFallback = false;
+    this._shouldUseFallbackOnReconnect = false;
     this._getShouldDebugExportedSenders = args.getShouldDebugExportedSenders;
 
     /**
@@ -253,7 +296,8 @@ export default class MTProtoSender {
      * Preserving the references of the AuthKey and state is important
      */
     this.authKey = authKey || new AuthKey();
-    this._state = new MTProtoState(this.authKey, this._log);
+    this._state = new MTProtoState(this.tempAuthKey, this._log);
+    this._state.timeOffset = args.timeOffset ?? 0;
 
     /**
      * Outgoing messages are put in a queue and sent in a batch.
@@ -333,9 +377,15 @@ export default class MTProtoSender {
    * @param connection
    * @param [force]
    * @param fallbackConnection
+   * @param shouldUseFallback
    * @returns {Promise<boolean>}
    */
-  async connect(connection: Connection, force: boolean, fallbackConnection?: Connection) {
+  async connect(
+    connection: Connection,
+    force: boolean,
+    fallbackConnection?: Connection,
+    shouldUseFallback?: boolean,
+  ) {
     this.userDisconnected = false;
 
     if (this._userConnected && !force) {
@@ -343,16 +393,23 @@ export default class MTProtoSender {
       return false;
     }
     this.isConnecting = true;
-    this._isFallback = this._shouldForceHttpTransport && this._shouldAllowHttpTransport;
+    this._isFallback = Boolean((this._shouldForceHttpTransport || shouldUseFallback)
+      && this._shouldAllowHttpTransport);
     this._connection = connection;
     this._fallbackConnection = fallbackConnection;
+    let hasConnected = false;
+    let connectionError: unknown;
 
     for (let attempt = 0; attempt < this._retries + this._retriesToFallback; attempt++) {
       try {
         if (attempt >= this._retriesToFallback && this._shouldAllowHttpTransport) {
-          this._isFallback = true;
-          this.logWithIndex.warn('Using fallback connection');
-          this._log.warn('Using fallback connection');
+          // Attempts alternate between HTTP and WebSocket, so a socket that failed only for a moment is retried
+          this._isFallback = this._shouldForceHttpTransport || (attempt - this._retriesToFallback) % 2 === 0;
+
+          if (this._isFallback) {
+            this.logWithIndex.warn('Using fallback connection');
+            this._log.warn('Using fallback connection');
+          }
         }
         this.logWithIndex.warn('Connecting...');
         await this._connect(this.getConnection()!);
@@ -360,8 +417,15 @@ export default class MTProtoSender {
         if (!this._isExported) {
           this._updateCallback?.(new UpdateConnectionState(UpdateConnectionState.connected));
         }
+        hasConnected = true;
         break;
       } catch (err) {
+        connectionError = err;
+        if (err instanceof PermAuthKeyInvalidError) {
+          if (!this._isExported) this._handleBadAuthKey();
+          break;
+        }
+        if (isAuthKeyNotFoundError(err)) this.resetTempAuthKey();
         if (!this._isExported && attempt === 0) {
           this._updateCallback?.(new UpdateConnectionState(UpdateConnectionState.disconnected));
         }
@@ -372,6 +436,9 @@ export default class MTProtoSender {
       }
     }
     this.isConnecting = false;
+    if (!hasConnected) {
+      throw connectionError instanceof Error ? connectionError : new Error('Connection failed');
+    }
 
     if (this._isFallback && !this._shouldForceHttpTransport) {
       void this.tryReconnectToMain();
@@ -381,31 +448,75 @@ export default class MTProtoSender {
   }
 
   async tryReconnectToMain() {
-    if (!this.isConnecting && this._isFallback && !this._isReconnectingToMain && !this.isReconnecting
-      && !this._shouldForceHttpTransport && !this._isExported) {
-      this._log.debug('Trying to reconnect to main connection');
-      this._isReconnectingToMain = true;
-      try {
-        await this._connection!.connect();
-        this._log.info('Reconnected to main connection');
-        this.logWithIndex.warn('Reconnected to main connection');
-        this.isReconnecting = true;
-        if (this._fallbackConnection) this._disconnect(this._fallbackConnection);
-        await this.connect(this._connection!, true, this._fallbackConnection);
-        this.isReconnecting = false;
-        this._isReconnectingToMain = false;
-      } catch (e) {
-        this.isReconnecting = false;
-        this._isReconnectingToMain = false;
-        this._log.error(
-          `Failed to reconnect to main connection, retrying in ${this._retryMainConnectionDelay}ms`,
+    if (this._isReconnectingToMain || !this.canRetryMainConnection()) return;
+
+    this._isReconnectingToMain = true;
+    let attempt = 0;
+
+    try {
+      while (this.canRetryMainConnection()) {
+        const delayMultiplier = MAIN_CONNECTION_RETRY_DELAY_MULTIPLIERS[
+          Math.min(attempt, MAIN_CONNECTION_RETRY_DELAY_MULTIPLIERS.length - 1)
+        ];
+        const retryDelay = Math.min(
+          this._retryMainConnectionDelay * delayMultiplier,
+          MAX_MAIN_CONNECTION_RETRY_DELAY,
         );
-        await sleep(this._retryMainConnectionDelay);
-        void this.tryReconnectToMain();
+        this._log.debug(`Trying to reconnect to main connection in ${retryDelay}ms`);
+        await sleep(retryDelay);
+
+        if (!this.canRetryMainConnection()) return;
+
+        const connection = this._connection!;
+        try {
+          await connection.connect();
+          if (!this.canRetryMainConnection() || connection !== this._connection) {
+            connection.disconnect();
+            return;
+          }
+
+          this.isReconnecting = true;
+          if (this._fallbackConnection) this._disconnect(this._fallbackConnection);
+          // Finish the HTTP loops before starting loops on the main connection
+          this._sendQueue.append(undefined);
+          this._sendQueueLongPoll.append(undefined);
+          await Promise.all([this._sendLoopHandle, this._recvLoopHandle, this._longPollLoopHandle]);
+          if (connection !== this._connection) {
+            connection.disconnect();
+            return;
+          }
+          if (this.userDisconnected) {
+            connection.disconnect();
+            this.isReconnecting = false;
+            return;
+          }
+          await this.connect(connection, true, this._fallbackConnection);
+          this.isReconnecting = false;
+
+          if (this._isFallback) {
+            this._log.error('Failed to reconnect to main connection');
+            attempt++;
+            continue;
+          }
+
+          this._log.info('Reconnected to main connection');
+          this.logWithIndex.warn('Reconnected to main connection');
+          return;
+        } catch {
+          this.isReconnecting = false;
+          this._isFallback = true;
+          this._log.error('Failed to reconnect to main connection');
+          attempt++;
+        }
       }
-    } else {
-      await sleep(this._retryMainConnectionDelay);
+    } finally {
+      this._isReconnectingToMain = false;
     }
+  }
+
+  private canRetryMainConnection() {
+    return !this.userDisconnected && !this.isConnecting && this._isFallback && !this.isReconnecting
+      && !this._shouldForceHttpTransport && !this._isExported;
   }
 
   isConnected() {
@@ -425,7 +536,17 @@ export default class MTProtoSender {
   }
 
   destroy() {
+    const error = new Error('Sender was disconnected');
+    for (const state of [
+      ...this._sendQueue._pendingStates,
+      ...this._sendQueueLongPoll._pendingStates,
+      ...this._pendingState.values(),
+    ]) {
+      state.reject?.(error);
+    }
     this._sendQueue.clear();
+    this._sendQueueLongPoll.clear();
+    this._pendingState.clear();
   }
 
   /**
@@ -529,33 +650,68 @@ export default class MTProtoSender {
       this._log.debug('Connection success!');
     }
 
-    if (!this.authKey.getKey()) {
-      const plain = new MtProtoPlainSender(connection, this._log);
-      this._log.debug('New auth_key attempt ...');
-      const res = await doAuthentication(plain, this._log, connection._dcId, connection._isTestServer);
-      this._log.debug('Generated new auth_key successfully');
-      await this.authKey.setKey(res.authKey);
+    const authTimeout = setTimeout(() => connection.disconnect(), AUTHENTICATION_TIMEOUT);
+    try {
+      if (!this.authKey.getKey()) {
+        const plain = new MtProtoPlainSender(connection, this._log);
+        this._log.debug('New auth_key attempt ...');
+        const res = await doAuthentication(plain, this._log, connection._dcId, connection._isTestServer);
+        this._log.debug('Generated new auth_key successfully');
+        this.updateTimeOffset(res.timeOffset);
+        res.authKey.createdAt = this._state.getServerTime();
+        await this.authKey.setKey(res.authKey);
 
-      this._state.timeOffset = res.timeOffset;
-      this._state.setServerSalt(res.serverSalt);
-
-      if (!this._isExported) {
-        this._updateCallback?.(new UpdateServerTimeOffset(this._state.timeOffset));
+        /**
+         * This is *EXTREMELY* important since we don't control
+         * external references to the authorization key, we must
+         * notify whenever we change it. This is crucial when we
+         * switch to different data centers.
+         */
+        if (this._authKeyCallback) {
+          await this._authKeyCallback(this.authKey, this._dcId);
+        }
+      } else {
+        this._authenticated = true;
+        this._log.debug('Already have an auth key ...');
       }
 
-      /**
-       * This is *EXTREMELY* important since we don't control
-       * external references to the authorization key, we must
-       * notify whenever we change it. This is crucial when we
-       * switch to different data centers.
-       */
-      if (this._authKeyCallback) {
-        await this._authKeyCallback(this.authKey, this._dcId);
+      const isTempAuthKeyCreated = await this.ensureTempAuthKey(connection);
+
+      if (connection instanceof HttpConnection && !isTempAuthKeyCreated) {
+        const httpConnectionCheck = new RequestState(new Api.Ping({ pingId: generateRandomLong() }));
+        const resolveHttpConnectionCheck = httpConnectionCheck.resolve!;
+        let hasReceivedPong = false;
+        httpConnectionCheck.resolve = (pong) => {
+          hasReceivedPong = true;
+          resolveHttpConnectionCheck(pong);
+        };
+        const pingData = this._sendQueue.getBeacon(httpConnectionCheck)!;
+        this._rememberSentMessage(httpConnectionCheck);
+
+        try {
+          await connection.send(await this._state.encryptMessageData(pingData));
+          const response = await connection.recv();
+          const message = await this.decryptMessageData(response);
+          this._pendingState.set(httpConnectionCheck.msgId!, httpConnectionCheck);
+          await this._processMessage(message);
+          if (message.obj instanceof Api.Pong && !hasReceivedPong) {
+            throw new Error('HTTP connection check did not receive a matching pong');
+          }
+        } catch (err) {
+          this._pendingState.delete(httpConnectionCheck.msgId!);
+          this._deleteSentMessage(httpConnectionCheck.msgId!);
+          throw err;
+        }
       }
-    } else {
-      this._authenticated = true;
-      this._log.debug('Already have an auth key ...');
+
+      if (!connection.isConnected()) throw new Error('Connection closed during authentication');
+    } catch (err) {
+      connection.disconnect();
+      throw err;
+    } finally {
+      clearTimeout(authTimeout);
     }
+
     this._userConnected = true;
     this.isReconnecting = false;
 
@@ -576,11 +732,204 @@ export default class MTProtoSender {
       this._longPollLoopHandle = this._longPollLoop();
     }
 
+    this.scheduleFutureServerSaltRefresh(SERVER_SALT_REQUEST_RETRY_DELAY);
+
     // _disconnected only completes after manual disconnection
     // or errors after which the sender cannot continue such
     // as failing to reconnect or any unexpected error.
 
     this._log.info('Connection to %s complete!'.replace('%s', connection.toString()));
+  }
+
+  private async ensureTempAuthKey(connection: Connection) {
+    const clusterId = connection.isMediaDc ? -connection._dcId : connection._dcId;
+    if (clusterId !== this.tempAuthKeyClusterId) {
+      this.tempAuthKeyClusterId = clusterId;
+      await this.tempAuthKey.setKey(undefined);
+    }
+    if (this.isTempAuthKeyUsable(this.tempAuthKey)) return false;
+
+    let isCreated = false;
+    const tempAuthKey = await this.getTempAuthKey(clusterId, () => {
+      isCreated = true;
+      return this.createTempAuthKey(connection);
+    }, this.isTempAuthKeyUsable.bind(this));
+    if (isCreated) return true;
+
+    await this.tempAuthKey.setKey(tempAuthKey);
+    this._state.resetForNewAuthKey();
+    return false;
+  }
+
+  private async createTempAuthKey(connection: Connection) {
+    const plain = new MtProtoPlainSender(connection, this._log);
+    const res = await doAuthentication(plain, this._log, connection._dcId, connection._isTestServer, {
+      expiresIn: TEMP_AUTH_KEY_EXPIRES_IN,
+      isMedia: connection.isMediaDc,
+    });
+    this.updateTimeOffset(res.timeOffset);
+    const serverTime = this._state.getServerTime();
+    // Keys without a stored timestamp get the full binding grace period
+    this.authKey.createdAt ??= serverTime;
+    res.authKey.expiresAt = serverTime + TEMP_AUTH_KEY_EXPIRES_IN;
+    await this.tempAuthKey.setKey(res.authKey);
+    this._state.resetForNewAuthKey();
+    this._state.setServerSalt(res.serverSalt);
+
+    try {
+      const isBound = await this.invokeDuringConnect(
+        connection, (msgId) => this.buildBindTempAuthKeyRequest(msgId),
+      );
+      if (!isBound) throw new Error('Temporary auth key binding failed');
+
+      await this.invokeDuringConnect(connection, () => this.initConnection(new Api.help.GetNearestDc()));
+    } catch (err) {
+      await this.tempAuthKey.setKey(undefined);
+      const { createdAt } = this.authKey;
+      if (err instanceof RPCError && err.errorMessage === 'ENCRYPTED_MESSAGE_INVALID'
+        && this._state.getServerTime() - createdAt > PERM_AUTH_KEY_BIND_GRACE) {
+        throw new PermAuthKeyInvalidError();
+      }
+      throw err;
+    }
+
+    return res.authKey;
+  }
+
+  private async buildBindTempAuthKeyRequest(msgId: bigint) {
+    const nonce = generateRandomLong();
+    const permAuthKeyId = this.authKey.keyId!;
+    const expiresAt = this.tempAuthKey.expiresAt!;
+    const encryptedMessage = await encryptBindAuthKeyInner(this.authKey, msgId, new Api.BindAuthKeyInner({
+      nonce,
+      tempAuthKeyId: this.tempAuthKey.keyId!,
+      permAuthKeyId,
+      tempSessionId: this._state.getSessionId(),
+      expiresAt,
+    }).getBytes());
+
+    return new Api.auth.BindTempAuthKey({
+      permAuthKeyId, nonce, expiresAt, encryptedMessage,
+    });
+  }
+
+  private async invokeDuringConnect<T extends CallableRequest>(
+    connection: Connection, buildRequest: (msgId: bigint) => T | Promise<T>,
+  ) {
+    for (let attempt = 0; attempt < MAX_CONNECT_REQUEST_ATTEMPTS; attempt++) {
+      const msgId = this._state._getNewMsgId();
+      const state = new RequestState(await buildRequest(msgId));
+      let isSettled = false;
+      const markSettled = () => {
+        isSettled = true;
+      };
+      void state.promise!.then(markSettled, markSettled);
+
+      const data = this._sendQueue.getBeacon(state, msgId)!;
+      this._rememberSentMessage(state);
+      this._pendingState.set(msgId, state);
+      try {
+        await connection.send(await this._state.encryptMessageData(data));
+
+        let isResent = false;
+        while (!isSettled && !isResent) {
+          const message = await this.decryptMessageData(await connection.recv());
+          await this._processMessage(message).catch((err: unknown) => {
+            if (!(err instanceof RPCError)) throw err;
+          });
+          isResent = this._sendQueue.remove(state);
+
+          if (!isSettled && !isResent && connection.shouldLongPoll) {
+            const httpWait = new RequestState(new Api.HttpWait({
+              maxDelay: 0, waitAfter: 0, maxWait: LONGPOLL_MAX_WAIT,
+            }));
+            await connection.send(await this._state.encryptMessageData(this._sendQueue.getBeacon(httpWait)!));
+          }
+        }
+
+        if (!isResent) return state.promise;
+      } finally {
+        this._pendingState.delete(msgId);
+        this._deleteSentMessage(msgId);
+        this._sendQueue.remove(state);
+      }
+    }
+
+    throw new Error('Request was resent too many times while connecting');
+  }
+
+  private resetTempAuthKey() {
+    const { keyId } = this.tempAuthKey;
+    if (keyId === undefined) return;
+
+    this.dropTempAuthKey(this.tempAuthKeyClusterId!, keyId);
+    void this.tempAuthKey.setKey(undefined);
+  }
+
+  private isTempAuthKeyUsable(authKey: AuthKey) {
+    return authKey.keyId !== undefined
+      && authKey.expiresAt! - TEMP_AUTH_KEY_EXPIRY_MARGIN > this._state.getServerTime();
+  }
+
+  private updateTimeOffset(timeOffset: number) {
+    this._state.timeOffset = timeOffset;
+    if (!this._isExported) this._updateCallback?.(new UpdateServerTimeOffset(timeOffset));
+  }
+
+  private async decryptMessageData(body: Uint8Array) {
+    const previousTimeOffset = this._state.timeOffset;
+    const message = await this._state.decryptMessageData(
+      body, this._hasRecentSentMessage.bind(this),
+    ) as TLMessage;
+
+    if (!this._isExported && this._state.timeOffset !== previousTimeOffset) {
+      this._updateCallback?.(new UpdateServerTimeOffset(this._state.timeOffset));
+    }
+
+    return message;
+  }
+
+  private requestFutureServerSalts() {
+    if (!this._userConnected || this.futureServerSaltRequest) return;
+
+    const request = this.send(new Api.GetFutureSalts({ num: MAX_FUTURE_SERVER_SALTS }))!;
+    this.futureServerSaltRequest = request;
+    void request
+      .then((futureSalts) => {
+        if (this.futureServerSaltRequest !== request) return;
+        if (!futureSalts?.salts.length) {
+          this.scheduleFutureServerSaltRefresh(SERVER_SALT_REQUEST_RETRY_DELAY);
+          return;
+        }
+
+        const latestValidUntil = futureSalts.salts.reduce((latest, { validUntil }) => (
+          Math.max(latest, validUntil)
+        ), 0);
+        const serverTime = this._state.getServerTime();
+        const refreshDelay = Math.max(
+          (latestValidUntil - serverTime - SERVER_SALT_REFRESH_MARGIN) * MILLISECONDS_PER_SECOND,
+          SERVER_SALT_REQUEST_RETRY_DELAY,
+        );
+        this.scheduleFutureServerSaltRefresh(refreshDelay);
+      })
+      .catch((err: unknown) => {
+        if (this.futureServerSaltRequest !== request) return;
+        this._log.warn(`Failed to request future server salts: ${String(err)}`);
+        this.scheduleFutureServerSaltRefresh(SERVER_SALT_REQUEST_RETRY_DELAY);
+      })
+      .finally(() => {
+        if (this.futureServerSaltRequest === request) this.futureServerSaltRequest = undefined;
+      });
+  }
+
+  private scheduleFutureServerSaltRefresh(delay: number) {
+    if (!this._userConnected) return;
+    if (this.futureServerSaltRefreshTimer) clearTimeout(this.futureServerSaltRefreshTimer);
+
+    this.futureServerSaltRefreshTimer = setTimeout(() => {
+      this.futureServerSaltRefreshTimer = undefined;
+      this.requestFutureServerSalts();
+    }, delay);
   }
 
   _disconnect(connection: Connection) {
@@ -595,6 +944,11 @@ export default class MTProtoSender {
 
     this._log.info('Disconnecting from %s...'.replace('%s', connection.toString()));
     this._userConnected = false;
+    this.futureServerSaltRequest = undefined;
+    if (this.futureServerSaltRefreshTimer) {
+      clearTimeout(this.futureServerSaltRefreshTimer);
+      this.futureServerSaltRefreshTimer = undefined;
+    }
     this._log.debug('Closing current connection...');
     this.logWithIndex.warn('Disconnecting');
     connection.disconnect();
@@ -607,10 +961,7 @@ export default class MTProtoSender {
 
       const res = this._sendQueueLongPoll.get();
 
-      if (this.isReconnecting || !this._isFallback) {
-        this._longPollLoopHandle = undefined;
-        return;
-      }
+      if (!this._userConnected || this.isReconnecting || !this._isFallback) break;
 
       if (!res) {
         continue;
@@ -626,15 +977,13 @@ export default class MTProtoSender {
       try {
         await this._fallbackConnection?.send(data);
       } catch (e: any) {
-        this._log.info('Connection closed while sending data');
-        // eslint-disable-next-line no-console
-        console.error(e);
-        this._longPollLoopHandle = undefined;
-        this.isSendingLongPoll = false;
-        if (!this.userDisconnected) {
-          this.reconnect();
+        if (!this.userDisconnected && !this.isReconnecting) {
+          this._log.info('Connection closed while sending data');
+          // eslint-disable-next-line no-console
+          console.error(e);
+          this.handleConnectionError(e);
         }
-        return;
+        break;
       }
 
       this.isSendingLongPoll = false;
@@ -642,6 +991,7 @@ export default class MTProtoSender {
     }
 
     this._longPollLoopHandle = undefined;
+    this.isSendingLongPoll = false;
   }
 
   /**
@@ -680,6 +1030,17 @@ export default class MTProtoSender {
       // This means that while it's not empty we can wait for
       // more messages to be added to the send queue.
       await this._sendQueue.wait();
+      if (!this._userConnected || this.isReconnecting) break;
+
+      // If we've had new ACKs appended while waiting for messages to send, add them to queue
+      appendAcks();
+
+      const hasQueuedMessages = this._sendQueue.values().some(Boolean);
+      if (!hasQueuedMessages) {
+        // Consume explicit empty queue markers before waiting again
+        this._sendQueue.get();
+        continue;
+      }
 
       if (this._isFallback) {
         // We don't long-poll on main loop, instead we have a separate loop for that
@@ -689,9 +1050,6 @@ export default class MTProtoSender {
           maxWait: 0,
         }));
       }
-
-      // If we've had new ACKs appended while waiting for messages to send, add them to queue
-      appendAcks();
 
       const res = this._sendQueue.get();
 
@@ -753,13 +1111,13 @@ export default class MTProtoSender {
           }
         }
       } catch (e: any) {
-        this.logWithIndex.debug(`Connection closed while sending data ${e}`);
-        this._log.info('Connection closed while sending data');
-        // eslint-disable-next-line no-console
-        console.error(e);
         this._sendLoopHandle = undefined;
-        if (!this.userDisconnected) {
-          this.reconnect();
+        if (!this.userDisconnected && !this.isReconnecting) {
+          this.logWithIndex.debug(`Connection closed while sending data ${e}`);
+          this._log.info('Connection closed while sending data');
+          // eslint-disable-next-line no-console
+          console.error(e);
+          this.handleConnectionError(e);
         }
         return;
       } finally {
@@ -795,42 +1153,41 @@ export default class MTProtoSender {
       try {
         body = await this.getConnection()!.recv();
       } catch (e: any) {
-        // this._log.info('Connection closed while receiving data');
-        /** when the server disconnects us we want to reconnect */
-        if (!this.userDisconnected) {
+        if (!this.userDisconnected && !this.isReconnecting) {
           this._log.warn('Connection closed while receiving data');
           // eslint-disable-next-line no-console
           console.error(e);
-          this.reconnect();
+          this.handleConnectionError(e);
         }
         this._recvLoopHandle = undefined;
         return;
       }
 
+      if (!this._userConnected || this.isReconnecting) break;
+
+      if (body.length === TRANSPORT_CODE_LENGTH && body.every((byte) => byte === 0)) {
+        void this.checkLongPoll();
+        continue;
+      }
+
       try {
         // TODO: Handle `DecryptedDataBlock` in calls like a regular `TLMessage` rather than `Uint8Array`
-        message = (await this._state.decryptMessageData(
-          body, this._hasRecentSentMessage.bind(this),
-          this._isFallback,
-        )) as TLMessage;
+        message = await this.decryptMessageData(body);
       } catch (e: any) {
         this.logWithIndex.debug(`Error while receiving items from the network ${e.toString()}`);
-        if (e instanceof MessageReplayError && this._isFallback) {
-          continue;
-        } else if (e instanceof TypeNotFoundError) {
+        if (e instanceof TypeNotFoundError) {
           // Received object which we don't know how to deserialize
           this._log.info(`Type ${e.invalidConstructorId} not found, remaining data ${e.remaining.length} bytes`);
           continue;
         } else if (e instanceof SecurityError) {
           // https://core.telegram.org/mtproto/security_guidelines#behavior-in-case-of-mismatch
-          this._log.warn('Invalid encrypted packet');
-          this.reconnect();
+          this.handleSecurityError();
           this._recvLoopHandle = undefined;
           return;
         } else if (e instanceof InvalidBufferError) {
-          // 404 means that the server has "forgotten" our auth key and we need to create a new one.
-          if (e.code === 404) {
-            this._handleBadAuthKey();
+          if (isAuthKeyNotFoundError(e)) {
+            this.resetTempAuthKey();
+            this.reconnect();
           } else {
             // this happens sometimes when telegram is having some internal issues.
             // reconnecting should be enough usually
@@ -854,8 +1211,7 @@ export default class MTProtoSender {
       } catch (e: any) {
         // `RPCError` errors except for 'AUTH_KEY_UNREGISTERED' should be handled by the client
         if (e instanceof SecurityError) {
-          this._log.warn('Invalid encrypted packet');
-          this.reconnect();
+          this.handleSecurityError();
           this._recvLoopHandle = undefined;
           return;
         } else if (e instanceof RPCError) {
@@ -889,6 +1245,11 @@ export default class MTProtoSender {
     }), undefined, true);
   }
 
+  private handleConnectionError(error: unknown) {
+    if (isAuthKeyNotFoundError(error)) this.resetTempAuthKey();
+    this.reconnect();
+  }
+
   _handleBadAuthKey(shouldSkipForMain?: boolean) {
     if (shouldSkipForMain && this._isMainSender) {
       return;
@@ -898,7 +1259,7 @@ export default class MTProtoSender {
 
     if (this._isMainSender && !this._isExported) {
       this._updateCallback?.(new UpdateConnectionState(UpdateConnectionState.broken));
-    } else if (!this._isMainSender && this._onConnectionBreak) {
+    } else if (this._isExported && this._onConnectionBreak) {
       this._onConnectionBreak(this._dcId);
     }
   }
@@ -917,13 +1278,17 @@ export default class MTProtoSender {
     this.logWithIndex.debug(`Process message ${message.obj.className}`);
 
     // https://core.telegram.org/mtproto/description#message-sequence-number-msg-seqno
-    if (message.isContentRelated) this._pendingAck.add(message.msgId);
+    if (message.isContentRelated) this.acknowledgeMessage(message.msgId);
 
     if (this.getConnection()!.shouldLongPoll) {
       this._sendQueue.setReady?.(true);
     }
 
-    if (this._state.consumeMessageReplay(message)) return;
+    // On a new connection the server can answer two outdated-salt messages with `BadServerSalt` under the same ID;
+    // dropping the second as a replay would hang its request. A replayed notification finds nothing to do anyway.
+    const isBadMessageNotice = message.obj instanceof Api.BadServerSalt
+      || message.obj instanceof Api.BadMsgNotification;
+    if (this._state.consumeMessageReplay(message) && !isBadMessageNotice) return;
 
     let handler = this._handlers[message.obj.CONSTRUCTOR_ID];
     if (!handler) {
@@ -932,6 +1297,23 @@ export default class MTProtoSender {
 
     await handler(message);
   }
+
+  private acknowledgeMessage(msgId: bigint) {
+    this._pendingAck.add(msgId);
+    if (this._pendingAck.size >= ACK_FLUSH_THRESHOLD) {
+      this._sendQueue.setReady?.(true);
+      return;
+    }
+
+    this.scheduleAckFlush();
+  }
+
+  // Flush ACKs even when no new requests wake the send loop
+  private scheduleAckFlush = throttle(() => {
+    if (!this._userConnected || this.isReconnecting || !this._pendingAck.size) return;
+
+    this._sendQueue.setReady?.(true);
+  }, ACK_FLUSH_DELAY, false);
 
   /**
    * Pops the states known to match the given ID from pending messages.
@@ -1116,6 +1498,13 @@ export default class MTProtoSender {
 
     this._forgetSentMessage(result.reqMsgId, false);
 
+    if (result.error?.errorMessage === 'AUTH_KEY_PERM_EMPTY' && this._userConnected && !this.isConnecting) {
+      this._pendingState.set(result.reqMsgId, state);
+      this.resetTempAuthKey();
+      this.reconnect();
+      return;
+    }
+
     if (result.error) {
       const error = RPCMessageToError(result.error, state.request);
       state.reject?.(error);
@@ -1198,12 +1587,6 @@ export default class MTProtoSender {
     this._pendingState.delete(pong.msgId);
     this._deleteSentMessage(pong.msgId);
 
-    const { timeOffset: newTimeOffset, isSessionReset } = this._state.updateTimeOffset(message.msgId);
-    if (isSessionReset) this._resetSessionTracking();
-    if (!this._isExported) {
-      this._updateCallback?.(new UpdateServerTimeOffset(newTimeOffset));
-    }
-
     this._log.debug(`Handling pong for message ${pong.msgId}`);
     state.resolve?.(pong);
   }
@@ -1228,8 +1611,10 @@ export default class MTProtoSender {
     this._forgetSentMessage(badSalt.badMsgId, sentMessage.isContainer);
     this._log.debug(`Handling bad salt for message ${badSalt.badMsgId}`);
     const states = this._popStates(badSalt.badMsgId);
-    this._state.setServerSalt(badSalt.newServerSalt);
+    this._state.setServerSalt(badSalt.newServerSalt, true);
     this._sendQueue.extend(states);
+    this.futureServerSaltRequest = undefined;
+    this.requestFutureServerSalts();
     this._log.debug(`${states.length} message(s) will be resent`);
   }
 
@@ -1255,7 +1640,16 @@ export default class MTProtoSender {
       // Sent msg_id too low or too high (respectively).
       // Use the current msg_id to determine the right time offset.
       const { timeOffset: newTimeOffset, isSessionReset } = this._state.updateTimeOffset(message.msgId);
-      if (isSessionReset) this._resetSessionTracking();
+      const shouldResetSession = badMsg.errorCode === MESSAGE_ID_TOO_HIGH_ERROR_CODE;
+      if (shouldResetSession && !isSessionReset) this._state.reset();
+      if (shouldResetSession || isSessionReset) {
+        this._resetSessionTracking();
+
+        if (this._isFallback) {
+          this.getConnection()?.disconnect();
+          this.reconnect();
+        }
+      }
 
       if (!this._isExported) {
         this._updateCallback?.(new UpdateServerTimeOffset(newTimeOffset));
@@ -1290,7 +1684,7 @@ export default class MTProtoSender {
     const sentSeqNo = this._getSentMessageSeqNo(sentMessage);
     if (!BAD_MESSAGE_ERROR_CODES.has(errorCode) || sentSeqNo !== badMsgSeqno) return false;
     if (errorCode === 16) return badMsgId < notificationMsgId; // Message ID is too low
-    if (errorCode === 17) return badMsgId > notificationMsgId; // Message ID is too high
+    if (errorCode === MESSAGE_ID_TOO_HIGH_ERROR_CODE) return badMsgId > notificationMsgId;
     if (errorCode === 18) return (badMsgId & 3n) !== 0n; // Message ID has invalid low bits
     if (errorCode === 19 || errorCode === 64) return sentMessage.isContainer; // Duplicate ID or invalid container
     if (errorCode === 34) return (sentSeqNo & 1) === 1; // Even sequence number expected
@@ -1313,7 +1707,7 @@ export default class MTProtoSender {
    */
   _handleDetailedInfo(message: TLMessage) {
     const { answerMsgId } = message.obj;
-    this._pendingAck.add(answerMsgId);
+    this.acknowledgeMessage(answerMsgId);
     this._log.debug(`Handling detailed info for message ${answerMsgId}`);
   }
 
@@ -1327,7 +1721,7 @@ export default class MTProtoSender {
    */
   _handleNewDetailedInfo(message: TLMessage) {
     const { answerMsgId } = message.obj;
-    this._pendingAck.add(answerMsgId);
+    this.acknowledgeMessage(answerMsgId);
     this._log.debug(`Handling new detailed info for message ${answerMsgId}`);
   }
 
@@ -1374,8 +1768,16 @@ export default class MTProtoSender {
     if (!(state?.request instanceof Api.GetFutureSalts)
       || state.request.num < 1
       || state.request.num > MAX_FUTURE_SERVER_SALTS
-      || futureSalts.salts.length > state.request.num
-      || !this._state.setFutureSalts(futureSalts.salts)) return;
+      || futureSalts.salts.length > state.request.num) return;
+
+    if (state.promise !== this.futureServerSaltRequest) {
+      this._pendingState.delete(futureSalts.reqMsgId);
+      this._forgetSentMessage(futureSalts.reqMsgId, false);
+      state.resolve?.();
+      return;
+    }
+
+    if (!this._state.setFutureSalts(futureSalts.salts)) return;
 
     this._pendingState.delete(futureSalts.reqMsgId);
     this._forgetSentMessage(futureSalts.reqMsgId, false);
@@ -1487,6 +1889,14 @@ export default class MTProtoSender {
   _handleMsgAll(message: TLMessage) {
   }
 
+  private handleSecurityError() {
+    this._log.warn('Invalid encrypted packet');
+    if (!this._isFallback && this._shouldAllowHttpTransport) {
+      this._shouldUseFallbackOnReconnect = true;
+    }
+    this.reconnect();
+  }
+
   reconnect() {
     if (this._userConnected && !this.isReconnecting) {
       this.isReconnecting = true;
@@ -1504,6 +1914,14 @@ export default class MTProtoSender {
   }
 
   async _reconnect() {
+    if (this.userDisconnected) {
+      this.isReconnecting = false;
+      this._shouldUseFallbackOnReconnect = false;
+      return;
+    }
+
+    const shouldUseFallback = this._shouldUseFallbackOnReconnect;
+    this._shouldUseFallbackOnReconnect = false;
     const currentConnection = this._connection!;
     const currentFallbackConnection = this._fallbackConnection;
     this._log.debug('Closing current connection...');
@@ -1535,6 +1953,7 @@ export default class MTProtoSender {
       loggers: currentConnection._log,
       isTestServer: currentConnection._isTestServer,
       isPremium: currentConnection._isPremium,
+      isMediaDc: currentConnection.isMediaDc,
     });
     // @ts-expect-error -- Hacky way to create new class instance
     const newFallbackConnection = new this._fallbackConnection.constructor({
@@ -1544,10 +1963,15 @@ export default class MTProtoSender {
       loggers: currentConnection._log,
       isTestServer: currentConnection._isTestServer,
       isPremium: currentConnection._isPremium,
+      isMediaDc: currentConnection.isMediaDc,
     });
-    await this.connect(newConnection, true, newFallbackConnection);
-
-    this.isReconnecting = false;
+    try {
+      await this.connect(newConnection, true, newFallbackConnection, shouldUseFallback);
+    } catch {
+      return;
+    } finally {
+      this.isReconnecting = false;
+    }
 
     if (this._autoReconnectCallback) {
       await this._autoReconnectCallback();
@@ -1573,4 +1997,9 @@ export default class MTProtoSender {
     this._lastSessionFirstMsgId = undefined;
     this._lastSessionUniqueId = undefined;
   }
+}
+
+function isAuthKeyNotFoundError(err: unknown) {
+  return (err instanceof InvalidBufferError && err.code === AUTH_KEY_NOT_FOUND_ERROR_CODE)
+    || (err instanceof HttpStreamError && err.status === AUTH_KEY_NOT_FOUND_ERROR_CODE);
 }

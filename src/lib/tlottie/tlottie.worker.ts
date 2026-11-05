@@ -2,7 +2,8 @@ import type { EmojiFitzModifier } from '../../util/emoji/skinTone';
 import type { CancellableCallback } from '../../util/PostMessageConnector';
 
 import { createWorkerInterface } from '../../util/createPostMessageInterface';
-import wasmUrl from './tlottie.wasm?url';
+import simdWasmUrl from './tlottie.wasm?url';
+import noSimdWasmUrl from './tlottie-no-simd.wasm?url';
 
 // Raw wasm ABI from https://github.com/dkaraush/tlottie (`src/bindings/wasm.rs`)
 interface TLottieExports {
@@ -30,6 +31,13 @@ interface TLottieExports {
 const HIGH_PRIORITY_MAX_FPS = 60;
 const LOW_PRIORITY_MAX_FPS = 30;
 const RGBA_BYTES_PER_PIXEL = 4;
+// This module uses `i8x16.splat` and `i8x16.popcnt` to detect SIMD support
+const SIMD_TEST = new Uint8Array([
+  0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00,
+  0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7B, 0x03,
+  0x02, 0x01, 0x00, 0x0A, 0x0A, 0x01, 0x08, 0x00,
+  0x41, 0x00, 0xFD, 0x0F, 0xFD, 0x62, 0x0B,
+]);
 
 let tlottie: TLottieExports | undefined;
 const tlottiePromise = loadTLottie().then((wasmExports) => {
@@ -37,6 +45,7 @@ const tlottiePromise = loadTLottie().then((wasmExports) => {
 });
 
 async function loadTLottie(): Promise<TLottieExports> {
+  const wasmUrl = WebAssembly.validate(SIMD_TEST) ? simdWasmUrl : noSimdWasmUrl;
   let result: WebAssembly.WebAssemblyInstantiatedSource;
   try {
     result = await WebAssembly.instantiateStreaming(fetch(wasmUrl), {});
@@ -56,7 +65,7 @@ const renderers = new Map<string, {
   imageData: ImageData;
   customColor?: [number, number, number];
 }>();
-const rendererOperations = new Map<string, Promise<void>>();
+const rendererOperations = new Map<string, Promise<unknown>>();
 
 async function init(
   key: string,
@@ -74,7 +83,7 @@ async function init(
   const animationData = await fetchAnimationData(tgsUrl);
   const instance = createInstance(animationData, fitzModifier);
   if (!instance) {
-    throw new Error('[TLottie] Failed to create renderer');
+    return false;
   }
 
   const imageData = new ImageData(imgSize, imgSize);
@@ -86,6 +95,7 @@ async function init(
   });
 
   onInit(reduceFactor, msPerFrame, reducedFramesCount);
+  return true;
 }
 
 async function changeData(
@@ -102,7 +112,7 @@ async function changeData(
   const animationData = await fetchAnimationData(tgsUrl);
   const instance = createInstance(animationData, fitzModifier);
   if (!instance) {
-    throw new Error('[TLottie] Failed to create renderer');
+    return false;
   }
 
   const renderer = renderers.get(key);
@@ -118,6 +128,7 @@ async function changeData(
   renderer.reduceFactor = reduceFactor;
 
   onInit(reduceFactor, msPerFrame, reducedFramesCount);
+  return true;
 }
 
 async function fetchAnimationData(tgsUrl: string) {
@@ -146,12 +157,14 @@ function createInstance(animationData: Uint8Array, fitzModifier?: EmojiFitzModif
     return undefined;
   }
 
-  // Heap views must be re-derived after every exported call: memory growth detaches buffers
-  new Uint8Array(tlottie!.memory.buffer).set(animationData, jsonPtr);
-  const instance = tlottie!.tlottie_new_with_options(jsonPtr, length, fitzModifier || 0, 0, 0);
-  tlottie!.tlottie_free(jsonPtr, length);
-
-  return instance || undefined;
+  try {
+    // Heap views must be re-derived after every exported call: memory growth detaches buffers
+    new Uint8Array(tlottie!.memory.buffer).set(animationData, jsonPtr);
+    const instance = tlottie!.tlottie_new_with_options(jsonPtr, length, fitzModifier || 0, 0, 0);
+    return instance || undefined;
+  } finally {
+    tlottie!.tlottie_free(jsonPtr, length);
+  }
 }
 
 function calcParams(instance: number, isLowPriority: boolean) {
@@ -208,7 +221,7 @@ function destroy(key: string) {
   renderers.delete(key);
 }
 
-function enqueueRendererOperation(key: string, operation: () => void | Promise<void>) {
+function enqueueRendererOperation<Result>(key: string, operation: () => Result | Promise<Result>) {
   const previousOperation = rendererOperations.get(key) || Promise.resolve();
   const operationPromise = previousOperation.catch(() => undefined).then(operation);
   rendererOperations.set(key, operationPromise);
@@ -221,7 +234,7 @@ function enqueueRendererOperation(key: string, operation: () => void | Promise<v
   return operationPromise;
 }
 
-function clearRendererOperation(key: string, operation: Promise<void>) {
+function clearRendererOperation(key: string, operation: Promise<unknown>) {
   if (rendererOperations.get(key) === operation) {
     rendererOperations.delete(key);
   }

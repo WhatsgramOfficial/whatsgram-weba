@@ -36,17 +36,31 @@ const TABLE_CONTROLS_PLUGIN_KEY = new PluginKey('richEditorTableControls');
 
 const tableViewsByEditorView = new WeakMap<EditorView, Set<RichEditorTableView>>();
 
-export const RichEditorTableTitle = buildRichEditorTextField({
+const RichEditorTableTitleNode = buildRichEditorTextField({
   name: TABLE_TITLE_NODE_NAME,
   dataAttribute: 'data-rich-editor-table-title',
+});
+
+export const RichEditorTableTitle = RichEditorTableTitleNode.extend({
+  priority: 110,
+
+  parseHTML() {
+    return [
+      { tag: '[data-rich-block-type="tableTitle"]' },
+      { tag: 'caption' },
+      ...(this.parent?.() || []),
+    ];
+  },
+
+  renderMarkdown(node, helpers) {
+    return helpers.renderChildren(node);
+  },
 });
 
 export function buildRichEditorTableExtensions() {
   return [
     RichEditorTableWrapper,
-    RichEditorTable.configure({
-      View: RichEditorTableView,
-    }),
+    RichEditorTable,
     RichEditorTableRow.configure({
       HTMLAttributes: {
         class: styles.tableRow,
@@ -57,7 +71,6 @@ export function buildRichEditorTableExtensions() {
         class: buildClassName(tiptapStyles.tableCell, styles.tableCell),
       },
     }),
-    RichEditorTableControlsExtension,
   ];
 }
 
@@ -68,7 +81,10 @@ const RichEditorTableWrapper = TiptapNode.create({
   isolating: true,
 
   parseHTML() {
-    return [{ tag: `div[${RICH_EDITOR_TABLE_DATA_ATTRIBUTE}]` }];
+    return [
+      { tag: `div[${RICH_EDITOR_TABLE_DATA_ATTRIBUTE}]` },
+      { tag: '[data-rich-block-type="table"]' },
+    ];
   },
 
   renderHTML({ HTMLAttributes }) {
@@ -113,6 +129,22 @@ const RichEditorTableWrapper = TiptapNode.create({
 });
 
 const RichEditorTable = TableExtension.extend({
+  addNodeView() {
+    const editorCommands: EditableTableProps['editorCommands'] = {
+      deleteColumn: () => this.editor.commands.deleteColumn(),
+      deleteRow: () => this.editor.commands.deleteRow(),
+      deleteTable: () => this.editor.commands.deleteTable(),
+    };
+
+    return ({ node, view, HTMLAttributes }) => new RichEditorTableView(
+      node,
+      this.options.cellMinWidth,
+      view,
+      mergeAttributes(this.options.HTMLAttributes, HTMLAttributes),
+      editorCommands,
+    );
+  },
+
   addAttributes() {
     return {
       ...this.parent?.(),
@@ -123,6 +155,10 @@ const RichEditorTable = TableExtension.extend({
       isStriped: {
         default: false,
         parseHTML: (element) => element.hasAttribute('striped'),
+      },
+      isCompact: {
+        default: false,
+        parseHTML: (element) => element.hasAttribute('compact'),
       },
     };
   },
@@ -177,7 +213,7 @@ const RichEditorTableCell = TableCellExtension.extend({
   },
 });
 
-const RichEditorTableControlsExtension = Extension.create({
+export const RichEditorTableControlsExtension = Extension.create({
   name: 'richEditorTableControls',
 
   addProseMirrorPlugins() {
@@ -207,6 +243,8 @@ const RichEditorTableControlsExtension = Extension.create({
 class RichEditorTableView extends TableView {
   private editorView: EditorView;
 
+  private editorCommands: EditableTableProps['editorCommands'];
+
   private renderer: TeactRenderer<EditableTableProps>;
 
   private renderVersion = 0;
@@ -219,11 +257,13 @@ class RichEditorTableView extends TableView {
     node: ProseMirrorNode,
     cellMinWidth: number,
     editorView: EditorView,
-    HTMLAttributes?: AnyLiteral,
+    HTMLAttributes: AnyLiteral | undefined,
+    editorCommands: EditableTableProps['editorCommands'],
   ) {
     super(node, cellMinWidth, editorView, HTMLAttributes);
 
     this.editorView = editorView;
+    this.editorCommands = editorCommands;
     this.dom.className = styles.root;
     this.updateTableClassName(node);
 
@@ -301,6 +341,7 @@ class RichEditorTableView extends TableView {
       colgroupElement: this.colgroup,
       contentElement,
       renderVersion: this.renderVersion,
+      editorCommands: this.editorCommands,
     };
   }
 
@@ -309,6 +350,7 @@ class RichEditorTableView extends TableView {
       styles.table,
       node.attrs.isBordered === false && styles.borderlessTable,
       node.attrs.isStriped && styles.stripedTable,
+      node.attrs.isCompact && styles.compactTable,
     );
   }
 }

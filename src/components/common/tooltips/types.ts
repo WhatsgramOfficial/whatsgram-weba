@@ -13,6 +13,12 @@ import type {
 } from '../../../api/types';
 import type { GlobalActions } from '../../../global';
 import type { InlineBotSettings, ThreadId } from '../../../types';
+import type { RichEditorTooltipsController } from './extensions/richEditorTooltips/controller';
+
+export type RichEditorTooltipsStorage = {
+  config?: RichEditorTooltipsConfig;
+  controller?: RichEditorTooltipsController;
+};
 
 export type RichEditorTooltipContext = {
   chatId: string;
@@ -31,6 +37,7 @@ export type RichEditorTooltipContext = {
   quickReplies?: Record<number, ApiQuickReply>;
   quickReplyMessages?: Record<number, ApiMessage>;
   isSavedMessages?: boolean;
+  isInScheduledList?: boolean;
   isCurrentUserPremium?: boolean;
   canSendGifs?: boolean;
   isRichInputExpanded?: boolean;

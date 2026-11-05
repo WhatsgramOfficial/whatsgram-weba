@@ -20,7 +20,6 @@ import { DEFAULT_APP_CONFIG } from '../limits';
 import { INITIAL_BROWSER_STATE } from './helpers/browser';
 
 export const INITIAL_PERFORMANCE_STATE_MAX: PerformanceType = {
-  messageBlur: true,
   animatedEmoji: true,
   autoplayGifs: true,
   autoplayVideos: true,
@@ -40,7 +39,6 @@ export const INITIAL_PERFORMANCE_STATE_MAX: PerformanceType = {
 };
 
 export const INITIAL_PERFORMANCE_STATE_MED: PerformanceType = {
-  messageBlur: false,
   animatedEmoji: true,
   autoplayGifs: true,
   autoplayVideos: true,
@@ -60,7 +58,6 @@ export const INITIAL_PERFORMANCE_STATE_MED: PerformanceType = {
 };
 
 export const INITIAL_PERFORMANCE_STATE_MIN: PerformanceType = {
-  messageBlur: false,
   animatedEmoji: false,
   autoplayGifs: false,
   autoplayVideos: false,
@@ -79,7 +76,7 @@ export const INITIAL_PERFORMANCE_STATE_MIN: PerformanceType = {
   textStreaming: false,
 };
 
-export const SHARED_STATE_CACHE_VERSION = 1;
+export const SHARED_STATE_CACHE_VERSION = 2;
 
 export const INITIAL_SHARED_STATE: SharedState = {
   cacheVersion: SHARED_STATE_CACHE_VERSION,
@@ -113,12 +110,13 @@ export const INITIAL_SHARED_STATE: SharedState = {
     canDisplayChatInTitle: true,
     shouldAllowHttpTransport: true,
     shouldWarnAboutFiles: true,
+    shouldKeepLockScreenBackground: true,
   },
   isInitial: true,
 };
 
 export const INITIAL_GLOBAL_STATE: GlobalState = {
-  cacheVersion: 5,
+  cacheVersion: 8,
   isInited: true,
   attachMenu: { bots: {} },
   passcode: {},
@@ -130,6 +128,8 @@ export const INITIAL_GLOBAL_STATE: GlobalState = {
   audioPlayer: {
     volume: DEFAULT_VOLUME,
     lastPlaybackRate: DEFAULT_PLAYBACK_RATE,
+    repeatMode: 'none',
+    orderMode: 'default',
   },
 
   mediaViewer: {
@@ -155,6 +155,7 @@ export const INITIAL_GLOBAL_STATE: GlobalState = {
     fullInfoById: {},
     previewMediaByBotId: {},
     commonChatsById: {},
+    savedMusicByPeerId: {},
     botAppPermissionsById: {},
   },
 
@@ -280,8 +281,14 @@ export const INITIAL_GLOBAL_STATE: GlobalState = {
 
   emojiKeywords: {},
 
+  emojiGroups: {},
+
   gifs: {
     saved: {},
+  },
+
+  musicSearch: {
+    audiosById: {},
   },
 
   topPeerCategories: {},
@@ -358,9 +365,6 @@ export const INITIAL_TAB_STATE: TabState = {
   newChatMembersProgress: NewChatMembersProgress.Closed,
   uiReadyState: 0,
   shouldInit: true,
-
-  gifSearch: {},
-  stickerSearch: {},
 
   messageLists: [],
   activeChatFolder: 0,
@@ -461,6 +465,4 @@ export const INITIAL_TAB_STATE: TabState = {
   requestedTranslations: {
     byChatId: {},
   },
-
-  isPaymentMessageConfirmDialogOpen: false,
 };

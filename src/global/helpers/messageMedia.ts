@@ -345,12 +345,13 @@ export function getStickerMediaHash(sticker: ApiSticker, target: SizeTarget) {
         return getStickerMediaHash(sticker, 'preview');
       }
       return `${base}?size=s`;
-    case 'preview':
+    case 'preview': {
       const hasMSize = sticker.previewPhotoSizes?.some((size) => size.type === 'm');
       if ((sticker.isCustomEmoji || sticker.isLottie || sticker.isVideo) && !hasMSize) {
         return undefined;
       }
       return `${base}?size=m`;
+    }
     case 'download':
       return `${base}?download`;
     case 'inline':

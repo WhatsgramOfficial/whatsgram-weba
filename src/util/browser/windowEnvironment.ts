@@ -33,7 +33,8 @@ export function getPlatform() {
   return undefined;
 }
 
-export const IS_PRODUCTION_HOST = window.location.hostname === PRODUCTION_HOSTNAME || window.location.hostname === 'web.wgram.my.id';
+export const IS_PRODUCTION_HOST = window.location.hostname === PRODUCTION_HOSTNAME
+  || window.location.hostname === 'web.wgram.my.id';
 export const PLATFORM_ENV = getPlatform();
 export const IS_MAC_OS = PLATFORM_ENV === 'macOS';
 export const IS_WINDOWS = PLATFORM_ENV === 'Windows';

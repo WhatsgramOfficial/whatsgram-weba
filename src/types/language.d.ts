@@ -242,6 +242,7 @@ export interface LangPair {
   'SponsoredMessageInfoDescription1': undefined;
   'SponsoredMessageInfoDescription2': undefined;
   'SponsoredMessageInfoDescription3': undefined;
+  'SponsoredMessageAlertLearnMoreUrl': undefined;
   'SponsoredMessageInfoDescription4': undefined;
   'Close': undefined;
   'Phone': undefined;
@@ -315,8 +316,11 @@ export interface LangPair {
   'Search': undefined;
   'Contacts': undefined;
   'Settings': undefined;
+  'SettingsDisableNightTheme': undefined;
+  'SettingsEnableNightTheme': undefined;
   'TelegramPremium': undefined;
   'New': undefined;
+  'TelegramFeatures': undefined;
   'ShortcutsControllerOthersLockByPasscode': undefined;
   'GroupAddMembers': undefined;
   'SendMessageTo': undefined;
@@ -1138,7 +1142,11 @@ export interface LangPair {
   'NoEmojiFound': undefined;
   'GroupInfoDeleteAndExit': undefined;
   'HidAccount': undefined;
+  'ConversationViewBot': undefined;
+  'ConversationViewPost': undefined;
+  'ConversationViewChannel': undefined;
   'Telegram': undefined;
+  'ChatListFilterAddToFolder': undefined;
   'ChatListUnpinFromTop': undefined;
   'ChatListPinToTop': undefined;
   'ChatListOpenInNewWindow': undefined;
@@ -1194,6 +1202,7 @@ export interface LangPair {
   'SettingsFolderCreate': undefined;
   'SettingsFoldersEmpty': undefined;
   'SettingsPasscodeSuccess': undefined;
+  'SettingsPasscodeEnabled': undefined;
   'SettingsPasscodeStart1': undefined;
   'SettingsPasscodeStart2': undefined;
   'PasscodeTooManyAttempts': undefined;
@@ -1590,6 +1599,16 @@ export interface LangPair {
   'PrivacyDisplayGift': undefined;
   'SendDisallowError': undefined;
   'PrivacySubscribeToTelegramPremium': undefined;
+  'PrivacyDisableLimitedEditionStarGifts': undefined;
+  'PrivacyEnableLimitedEditionStarGifts': undefined;
+  'PrivacyDisableUnlimitedStarGifts': undefined;
+  'PrivacyEnableUnlimitedStarGifts': undefined;
+  'PrivacyDisableUniqueStarGifts': undefined;
+  'PrivacyEnableUniqueStarGifts': undefined;
+  'PrivacyDisablePremiumGifts': undefined;
+  'PrivacyEnablePremiumGifts': undefined;
+  'DisplayGiftsButton': undefined;
+  'HideGiftsButton': undefined;
   'Review': undefined;
   'CheckPrivacyCallsText': undefined;
   'CheckPrivacyInviteText': undefined;
@@ -3919,8 +3938,15 @@ export interface LangPairWithVariables<V = LangVariable> {
   'ChannelEarnAbout': {
     'link': V;
   };
+  'CreditsBoxHistoryEntryGiftOutAbout': {
+    'user': V;
+    'link': V;
+  };
   'StarsTransactionTOS': {
     'link': V;
+  };
+  'GiftStarsOutgoing': {
+    'user': V;
   };
   'GiftPremiumDescription': {
     'user': V;
@@ -5951,9 +5977,28 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
   'ActionGiveawayResultsStars': {
     'count': V;
   };
+  'ActionGiveawayResultPremiumText': {
+    'channel': V;
+    'months': V;
+  };
+  'ActionGiftCodePremiumText': {
+    'channel': V;
+    'months': V;
+  };
   'ActionGiveawayResultStarsText': {
     'channel': V;
     'amount': V;
+  };
+  'ActionGiftCodeSubscriptionText': {
+    'peer': V;
+    'months': V;
+  };
+  'ActionGiftCodeSubscriptionTextYou': {
+    'peer': V;
+    'months': V;
+  };
+  'ActionGiftPremiumTitle': {
+    'months': V;
   };
   'ActionGiftStarsTitle': {
     'amount': V;
@@ -6400,6 +6445,7 @@ export interface LangKeyGroups {
       | 'EditAdminTransferChannelOwnershipSuccess'
       | 'EditAdminTransferGroupOwnershipSuccess'
       | 'VoipPeerIncompatible'
+      | 'GiftStarsOutgoing'
       | 'StarGiftDescription'
       | 'GiftPeerUpgradeUniqueDescription'
       | 'GiftPeerUpgradeTransferableDescription'
@@ -7013,6 +7059,7 @@ export interface LangKeyGroups {
   };
   'link,user': {
     keys:
+      | 'CreditsBoxHistoryEntryGiftOutAbout'
       | 'GiftPremiumDescription'
       | 'GiftMakeUniqueDescription'
       | 'PremiumEmojiStatusTitle';
@@ -8115,11 +8162,28 @@ export interface LangPluralKeyGroups {
       | 'ActionBoostApply';
     variables: 'count' | 'from';
   };
+  'channel,months': {
+    keys:
+      | 'ActionGiveawayResultPremiumText'
+      | 'ActionGiftCodePremiumText';
+    variables: 'channel' | 'months';
+  };
   'amount,channel': {
     keys:
       | 'ActionGiveawayResultStarsText'
       | 'StarsSubscriptionCompletedText';
     variables: 'amount' | 'channel';
+  };
+  'months,peer': {
+    keys:
+      | 'ActionGiftCodeSubscriptionText'
+      | 'ActionGiftCodeSubscriptionTextYou';
+    variables: 'months' | 'peer';
+  };
+  'months': {
+    keys:
+      | 'ActionGiftPremiumTitle';
+    variables: 'months';
   };
   'amount,count,totalAmount,user': {
     keys:

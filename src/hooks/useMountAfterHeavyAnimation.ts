@@ -8,7 +8,7 @@ export default function useMountAfterHeavyAnimation(hasIntersected: boolean) {
 
   useHeavyAnimation(
     undefined,
-    () => setNoHeavyAnimation(true)
+    () => setNoHeavyAnimation(true),
   );
 
   useEffect(() => {

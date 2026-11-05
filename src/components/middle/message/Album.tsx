@@ -11,6 +11,7 @@ import type { IAlbum, ThemeKey } from '../../../types';
 import {
   getIsDownloading, getMediaDimensions, getMessageContent, getMessageHtmlId, getMessagePhoto,
   isMessageFailed, isMessageLocal,
+} from '../../../global/helpers';
 import {
   selectActiveDownloads,
   selectCanAutoLoadMedia,

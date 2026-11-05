@@ -81,7 +81,7 @@ export async function uploadFile(
 
     const promise = (async (jMemo: number, blobSliceMemo: Blob) => {
       try {
-        let partBytes: Uint8Array;
+        let partBytes: Uint8Array<ArrayBuffer>;
         try {
           partBytes = new Uint8Array(await blobSliceMemo.arrayBuffer());
         } catch {

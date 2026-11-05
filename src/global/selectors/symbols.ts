@@ -281,7 +281,7 @@ export function selectDiceSticker<T extends GlobalState>(global: T, diceEmoji: s
 
   const numberEmoji = `${value}\u20E3`;
   const sticker = diceSet.stickers?.find((s) => s.emoji === numberEmoji);
-  
+
   if (!sticker && diceSet.stickers && value > 0 && value < diceSet.stickers.length) {
     return diceSet.stickers[value];
   }

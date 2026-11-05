@@ -77,7 +77,6 @@ export default defineConfig(({ mode }): UserConfig => {
     HTTPS_KEY_PATH: httpsKeyPath = '',
   } = env;
   const appEnv = env.APP_ENV || (mode === 'development' ? 'development' : 'production');
-  const appMockedClient = env.APP_MOCKED_CLIENT || '';
   const defaultAppTitle = `Whatsgram${appEnv !== 'production' ? ' Beta' : ''}`;
   const baseUrl = env.BASE_URL || PRODUCTION_URL;
   const appTitle = env.APP_TITLE || defaultAppTitle;
